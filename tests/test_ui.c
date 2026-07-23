@@ -93,9 +93,66 @@ static bool test_drawing(void)
     return true;
 }
 
+static bool test_rpg_composites(void)
+{
+    static const kilix_ui_party_member party[] = {
+        {"Arden", "Lv 4", "Ready", "HP", 38.0f, 42.0f,
+         "MP", 8.0f, 12.0f, true},
+        {"Mira", "Lv 3", "Silenced", "HP", 25.0f, 31.0f,
+         "MP", 19.0f, 24.0f, true}
+    };
+    static const kilix_ui_inventory_item inventory[] = {
+        {"Tonic", "Restores vitality.", 3, false, true},
+        {"Bronze Blade", "Equipped by Arden.", 1, true, true}
+    };
+    static const kilix_ui_command commands[] = {
+        {"1", "Attack", "", true}, {"2", "Spell", "4 MP", true}
+    };
+    static const kilix_ui_target targets[] = {
+        {"Glass Wisp", "Marked", 17.0f, 22.0f, true},
+        {"Root Eye", "Asleep", 9.0f, 30.0f, false}
+    };
+    static const kilix_ui_shop_item shop[] = {
+        {"Tonic", 12, 3, true}, {"Moon Charm", 40, 0, false}
+    };
+    ki_td_soft_renderer renderer = {0};
+    ki_td_view view = {.logical_width = 480, .logical_height = 300,
+                       .scale = 1.0f};
+    kilix_ui_style style;
+    kilix_ui_focus focus;
+    uint8_t *rgba;
+    uint64_t hash;
+    CHECK(ki_td_soft_renderer_init(&renderer, 480, 300));
+    kilix_ui_style_init(&style);
+    kilix_ui_focus_init(&focus, 2u, 2u);
+    ki_td_soft_clear(&renderer, UINT32_C(0x05070c));
+    kilix_ui_draw_party(&renderer, &view, (ki_td_rect){4, 4, 230, 82},
+                        &style, NULL, &focus, party, 2u);
+    kilix_ui_draw_inventory(&renderer, &view,
+                            (ki_td_rect){242, 4, 234, 82},
+                            &style, NULL, &focus, inventory, 2u);
+    kilix_ui_draw_commands(&renderer, &view,
+                           (ki_td_rect){4, 94, 230, 48},
+                           &style, NULL, &focus, commands, 2u);
+    kilix_ui_draw_targets(&renderer, &view,
+                          (ki_td_rect){242, 94, 234, 82},
+                          &style, NULL, &focus, targets, 2u);
+    kilix_ui_draw_shop(&renderer, &view, (ki_td_rect){4, 184, 472, 72},
+                       &style, NULL, &focus, shop, 2u, "Gil", 27);
+    rgba = ki_td_soft_pack_rgba(&renderer);
+    CHECK(rgba != NULL);
+    hash = hash_bytes(rgba, renderer.rgba_size);
+    CHECK(hash != 0u && hash != UINT64_MAX);
+    CHECK(renderer.canvas.px[8 + 8 * renderer.canvas.w] !=
+          UINT32_C(0xff05070c));
+    ki_td_soft_renderer_destroy(&renderer);
+    return true;
+}
+
 int main(void)
 {
-    if (!test_focus() || !test_drawing()) return EXIT_FAILURE;
-    (void)puts("PASS kilix-ui focus list dialogue portrait meter prompts");
+    if (!test_focus() || !test_drawing() || !test_rpg_composites())
+        return EXIT_FAILURE;
+    (void)puts("PASS kilix-ui focus dialogue meters and RPG composites");
     return EXIT_SUCCESS;
 }

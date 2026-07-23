@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 #define KILIX_UI_VERSION_MAJOR 0
-#define KILIX_UI_VERSION_MINOR 1
+#define KILIX_UI_VERSION_MINOR 2
 #define KILIX_UI_VERSION_PATCH 0
 
 typedef enum kilix_ui_action {
@@ -99,6 +99,90 @@ void kilix_ui_draw_prompts(ki_td_soft_renderer *renderer,
                            const kilix_ui_style *style,
                            const kilix_ui_prompt *prompts,
                            size_t prompt_count);
+
+typedef struct kilix_ui_party_member {
+    const char *name;
+    const char *level;
+    const char *status;
+    const char *primary_label;
+    float primary;
+    float primary_maximum;
+    const char *secondary_label;
+    float secondary;
+    float secondary_maximum;
+    bool enabled;
+} kilix_ui_party_member;
+
+typedef struct kilix_ui_inventory_item {
+    const char *name;
+    const char *detail;
+    int quantity;
+    bool equipped;
+    bool enabled;
+} kilix_ui_inventory_item;
+
+typedef struct kilix_ui_command {
+    const char *key;
+    const char *label;
+    const char *cost;
+    bool enabled;
+} kilix_ui_command;
+
+typedef struct kilix_ui_target {
+    const char *name;
+    const char *status;
+    float vitality;
+    float vitality_maximum;
+    bool enabled;
+} kilix_ui_target;
+
+typedef struct kilix_ui_shop_item {
+    const char *name;
+    int price;
+    int owned;
+    bool enabled;
+} kilix_ui_shop_item;
+
+/*
+ * Higher-level RPG composites borrow every string and perform no allocation.
+ * Focus and all game semantics remain caller-owned.
+ */
+void kilix_ui_draw_party(ki_td_soft_renderer *renderer,
+                         const ki_td_view *view, ki_td_rect rect,
+                         const kilix_ui_style *style,
+                         const ki_td_nine_slice *skin,
+                         const kilix_ui_focus *focus,
+                         const kilix_ui_party_member *members,
+                         size_t member_count);
+void kilix_ui_draw_inventory(ki_td_soft_renderer *renderer,
+                             const ki_td_view *view, ki_td_rect rect,
+                             const kilix_ui_style *style,
+                             const ki_td_nine_slice *skin,
+                             const kilix_ui_focus *focus,
+                             const kilix_ui_inventory_item *items,
+                             size_t item_count);
+void kilix_ui_draw_commands(ki_td_soft_renderer *renderer,
+                            const ki_td_view *view, ki_td_rect rect,
+                            const kilix_ui_style *style,
+                            const ki_td_nine_slice *skin,
+                            const kilix_ui_focus *focus,
+                            const kilix_ui_command *commands,
+                            size_t command_count);
+void kilix_ui_draw_targets(ki_td_soft_renderer *renderer,
+                           const ki_td_view *view, ki_td_rect rect,
+                           const kilix_ui_style *style,
+                           const ki_td_nine_slice *skin,
+                           const kilix_ui_focus *focus,
+                           const kilix_ui_target *targets,
+                           size_t target_count);
+void kilix_ui_draw_shop(ki_td_soft_renderer *renderer,
+                        const ki_td_view *view, ki_td_rect rect,
+                        const kilix_ui_style *style,
+                        const ki_td_nine_slice *skin,
+                        const kilix_ui_focus *focus,
+                        const kilix_ui_shop_item *items,
+                        size_t item_count, const char *currency,
+                        int balance);
 
 #ifdef __cplusplus
 }

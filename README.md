@@ -8,11 +8,17 @@ It builds on `kilix-top-down-engine` and provides:
 - fallback or atlas-backed nine-slice panels;
 - dialogue boxes with optional portraits and prompts;
 - bounded meters and compact input-prompt rows.
+- allocation-free RPG party, inventory, command, target, and shop composites.
 
 Games own every label, semantic action, selection consequence, portrait
 choice, statistic, and visual theme. The library only turns those inputs into
 consistent navigation and drawing. All draw calls borrow their strings and
 images and perform no allocation.
+
+The RPG composites accept plain caller-owned view records. They do not mutate
+inventory, spend currency, apply damage, choose targets, advance turns, or
+interpret status names. This keeps genre rules in each game while eliminating
+duplicated panel layout and focus presentation.
 
 ## Build and verify
 

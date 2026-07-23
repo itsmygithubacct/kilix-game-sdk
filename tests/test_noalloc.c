@@ -50,6 +50,13 @@ int main(void)
     static const char *const items[2] = {"Items", "Status"};
     static const char *const lines[1] = {"Allocation-free dialogue."};
     static const kilix_ui_prompt prompts[1] = {{"Enter", "Choose", true}};
+    static const kilix_ui_party_member party[1] = {
+        {"Hero", "Lv 1", "Ready", "HP", 8.0f, 10.0f,
+         "MP", 3.0f, 4.0f, true}
+    };
+    static const kilix_ui_command commands[1] = {
+        {"1", "Attack", "", true}
+    };
     ki_td_rgba8 image = ki_td_rgba8_make(pixels, 3, 3);
     ki_td_nine_slice skin;
     ki_td_soft_renderer renderer = {0};
@@ -71,6 +78,11 @@ int main(void)
                         &style, 3.0f, 5.0f, "HP");
     kilix_ui_draw_prompts(&renderer, &view, 68, 22, 80, &style,
                           prompts, 1u);
+    kilix_ui_draw_party(&renderer, &view, (ki_td_rect){68, 38, 88, 42},
+                        &style, NULL, &focus, party, 1u);
+    kilix_ui_draw_commands(&renderer, &view,
+                           (ki_td_rect){2, 2, 60, 24},
+                           &style, NULL, &focus, commands, 1u);
     watching = 0;
     ki_td_soft_renderer_destroy(&renderer);
     if (operations != 0u) {

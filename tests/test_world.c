@@ -58,6 +58,20 @@ static bool test_navigation_and_visibility(void)
         ".###.",
         "....."
     }};
+    fixture tie_blocked = {{
+        ".....",
+        ".#...",
+        ".....",
+        ".....",
+        "....."
+    }};
+    fixture alternate_tie_blocked = {{
+        ".#...",
+        ".....",
+        ".....",
+        ".....",
+        "....."
+    }};
     kilix_world_grid grid;
     kilix_world_search search;
     uint32_t heap[CELL_COUNT];
@@ -95,6 +109,17 @@ static bool test_navigation_and_visibility(void)
         false, &visible) == KILIX_WORLD_OK && !visible);
     CHECK(kilix_world_line_of_sight(
         &grid, (kilix_world_cell){0, 0}, (kilix_world_cell){4, 0},
+        false, &visible) == KILIX_WORLD_OK && visible);
+    CHECK(kilix_world_grid_init(&grid, 5, 5, &tie_blocked, walkable,
+                                move_cost, opaque) == KILIX_WORLD_OK);
+    CHECK(kilix_world_line_of_sight(
+        &grid, (kilix_world_cell){0, 0}, (kilix_world_cell){2, 1},
+        false, &visible) == KILIX_WORLD_OK && !visible);
+    CHECK(kilix_world_grid_init(
+        &grid, 5, 5, &alternate_tie_blocked, walkable,
+        move_cost, opaque) == KILIX_WORLD_OK);
+    CHECK(kilix_world_line_of_sight(
+        &grid, (kilix_world_cell){0, 0}, (kilix_world_cell){2, 1},
         false, &visible) == KILIX_WORLD_OK && visible);
     return true;
 }

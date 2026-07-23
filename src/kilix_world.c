@@ -417,11 +417,11 @@ kilix_world_result kilix_world_line_of_sight(
     while (x != to.x || y != to.y) {
         int64_t doubled = error * 2;
         kilix_world_cell current;
-        if (doubled > -dy) {
+        if (doubled >= -dy) {
             error -= dy;
             x += sx;
         }
-        if (doubled < dx) {
+        if (doubled <= dx) {
             error += dx;
             y += sy;
         }

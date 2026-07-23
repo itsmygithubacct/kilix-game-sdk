@@ -2,8 +2,10 @@
 set -eu
 
 repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-top_down="$repository/third_party/kilix-top-down-engine"
-soft_raster="$top_down/third_party/soft-raster"
+top_down_input=${KILIX_TOP_DOWN_DIR:-"$repository/third_party/kilix-top-down-engine"}
+soft_raster_input=${SOFT_RASTER_DIR:-"$top_down_input/third_party/soft-raster"}
+top_down=$(CDPATH= cd -- "$top_down_input" && pwd)
+soft_raster=$(CDPATH= cd -- "$soft_raster_input" && pwd)
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/kilix-ui-fragment.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 

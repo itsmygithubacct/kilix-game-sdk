@@ -78,7 +78,7 @@ uint16_t kilix_world_cell_move_cost(const kilix_world_grid *grid,
                                     kilix_world_cell from,
                                     kilix_world_cell to)
 {
-    if (!kilix_world_in_bounds(grid, from) ||
+    if (!kilix_world_cell_walkable(grid, from) ||
         !kilix_world_cell_walkable(grid, to)) return 0u;
     return grid->move_cost ? grid->move_cost(grid->context, from, to) :
            UINT16_C(1);
@@ -267,6 +267,8 @@ static kilix_world_result prepare_search(
         return KILIX_WORLD_INVALID_ARGUMENT;
     if (kilix_world_cell_index(grid, start, start_index) != KILIX_WORLD_OK)
         return KILIX_WORLD_OUT_OF_BOUNDS;
+    if (!kilix_world_cell_walkable(grid, start))
+        return KILIX_WORLD_BLOCKED;
     reset_search(search, *count);
     search->distance[*start_index] = 0u;
     if (!heap_push_or_update(grid, search, *start_index,
@@ -440,11 +442,29 @@ kilix_world_result kilix_world_line_of_sight(
 
 static uint32_t cell_distance(kilix_world_cell left, kilix_world_cell right)
 {
-    uint32_t dx = (uint32_t)(left.x > right.x ? left.x - right.x :
-                             right.x - left.x);
-    uint32_t dy = (uint32_t)(left.y > right.y ? left.y - right.y :
-                             right.y - left.y);
-    return dx > UINT32_MAX - dy ? UINT32_MAX : dx + dy;
+    int64_t signed_dx = (int64_t)left.x - (int64_t)right.x;
+    int64_t signed_dy = (int64_t)left.y - (int64_t)right.y;
+    uint64_t dx = signed_dx < 0 ? (uint64_t)-signed_dx :
+                                  (uint64_t)signed_dx;
+    uint64_t dy = signed_dy < 0 ? (uint64_t)-signed_dy :
+                                  (uint64_t)signed_dy;
+    return dx > UINT32_MAX || dy > UINT32_MAX - dx ?
+           UINT32_MAX : (uint32_t)(dx + dy);
+}
+
+static bool region_valid_for_grid(const kilix_world_grid *grid,
+                                  const kilix_world_region *region)
+{
+    int64_t right;
+    int64_t bottom;
+    if (!grid_dimensions_valid(grid, NULL) || !region ||
+        region->width <= 0 || region->height <= 0 ||
+        region->x < 0 || region->y < 0)
+        return false;
+    right = (int64_t)region->x + (int64_t)region->width;
+    bottom = (int64_t)region->y + (int64_t)region->height;
+    return right <= (int64_t)grid->width &&
+           bottom <= (int64_t)grid->height;
 }
 
 const kilix_world_region *kilix_world_region_at(
@@ -456,10 +476,16 @@ const kilix_world_region *kilix_world_region_at(
         !kilix_world_in_bounds(&map->grid, cell)) return NULL;
     for (index = 0u; index < map->region_count; ++index) {
         const kilix_world_region *region = &map->regions[index];
-        if (region->width <= 0 || region->height <= 0 ||
-            cell.x < region->x || cell.y < region->y ||
-            cell.x - region->x >= region->width ||
-            cell.y - region->y >= region->height)
+        int64_t right;
+        int64_t bottom;
+        if (!region_valid_for_grid(&map->grid, region))
+            continue;
+        right = (int64_t)region->x + (int64_t)region->width;
+        bottom = (int64_t)region->y + (int64_t)region->height;
+        if ((int64_t)cell.x < (int64_t)region->x ||
+            (int64_t)cell.y < (int64_t)region->y ||
+            (int64_t)cell.x >= right ||
+            (int64_t)cell.y >= bottom)
             continue;
         if (!selected || region->priority > selected->priority)
             selected = region;
@@ -471,9 +497,11 @@ const kilix_world_portal *kilix_world_portal_at(
     const kilix_world_map *map, kilix_world_cell cell)
 {
     size_t index;
-    if (!map || (map->portal_count != 0u && !map->portals)) return NULL;
+    if (!map || (map->portal_count != 0u && !map->portals) ||
+        !kilix_world_in_bounds(&map->grid, cell)) return NULL;
     for (index = 0u; index < map->portal_count; ++index)
-        if (map->portals[index].cell.x == cell.x &&
+        if (kilix_world_in_bounds(&map->grid, map->portals[index].cell) &&
+            map->portals[index].cell.x == cell.x &&
             map->portals[index].cell.y == cell.y)
             return &map->portals[index];
     return NULL;
@@ -492,7 +520,9 @@ const kilix_world_object *kilix_world_interaction_at(
     for (index = 0u; index < map->object_count; ++index) {
         const kilix_world_object *object = &map->objects[index];
         uint32_t distance;
-        if ((object->interaction_mask & interaction_mask) == 0u) continue;
+        if (!kilix_world_in_bounds(&map->grid, object->cell) ||
+            (object->interaction_mask & interaction_mask) == 0u)
+            continue;
         distance = cell_distance(origin, object->cell);
         if (distance > maximum_distance) continue;
         if (!selected || distance < selected_distance ||
@@ -548,10 +578,7 @@ kilix_world_result kilix_world_catalog_validate(
         for (index = 0u; index < map->region_count; ++index) {
             const kilix_world_region *region = &map->regions[index];
             size_t previous;
-            if (region->width <= 0 || region->height <= 0 ||
-                region->x < 0 || region->y < 0 ||
-                region->x > map->grid.width - region->width ||
-                region->y > map->grid.height - region->height)
+            if (!region_valid_for_grid(&map->grid, region))
                 return KILIX_WORLD_INVALID_MAP;
             for (previous = 0u; previous < index; ++previous)
                 if (map->regions[previous].id == region->id)

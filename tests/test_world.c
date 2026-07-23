@@ -1,6 +1,7 @@
 #include "kilix_world.h"
 #include "kilix_world_top_down.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,6 +105,16 @@ static bool test_navigation_and_visibility(void)
         &grid, (kilix_world_cell){0, 0}, 2u, &search,
         reachable, CELL_COUNT, &reachable_count) == KILIX_WORLD_OK);
     CHECK(reachable_count == 5u);
+    CHECK(kilix_world_find_path(
+        &grid, (kilix_world_cell){1, 1}, (kilix_world_cell){0, 1},
+        &search, path, CELL_COUNT, &path_count, &total_cost) ==
+        KILIX_WORLD_BLOCKED);
+    CHECK(kilix_world_reachable(
+        &grid, (kilix_world_cell){1, 1}, 2u, &search,
+        reachable, CELL_COUNT, &reachable_count) == KILIX_WORLD_BLOCKED);
+    CHECK(kilix_world_cell_move_cost(
+        &grid, (kilix_world_cell){1, 1},
+        (kilix_world_cell){0, 1}) == 0u);
     CHECK(kilix_world_line_of_sight(
         &grid, (kilix_world_cell){0, 1}, (kilix_world_cell){4, 1},
         false, &visible) == KILIX_WORLD_OK && !visible);
@@ -175,6 +186,41 @@ static bool test_world_records(void)
     return true;
 }
 
+static bool test_invalid_records_are_safe(void)
+{
+    fixture world = {{".....", ".....", ".....", ".....", "....."}};
+    kilix_world_region invalid_region = {
+        1u, INT32_MIN, 0, 1, 1, 0
+    };
+    kilix_world_object invalid_object = {
+        2u, {INT32_MIN, INT32_MIN}, UINT32_C(1), 0
+    };
+    kilix_world_portal invalid_portal = {
+        3u, {INT32_MIN, INT32_MIN}, 1u, 3u
+    };
+    kilix_world_map map = {0};
+
+    map.id = 1u;
+    map.regions = &invalid_region;
+    map.region_count = 1u;
+    map.objects = &invalid_object;
+    map.object_count = 1u;
+    map.portals = &invalid_portal;
+    map.portal_count = 1u;
+    CHECK(kilix_world_grid_init(&map.grid, 5, 5, &world, walkable,
+                                NULL, opaque) == KILIX_WORLD_OK);
+    CHECK(kilix_world_region_at(
+              &map, (kilix_world_cell){0, 0}) == NULL);
+    CHECK(kilix_world_interaction_at(
+              &map, (kilix_world_cell){0, 0}, UINT32_C(1),
+              UINT32_MAX) == NULL);
+    CHECK(kilix_world_portal_at(
+              &map, (kilix_world_cell){0, 0}) == NULL);
+    CHECK(kilix_world_portal_at(
+              &map, (kilix_world_cell){-1, 0}) == NULL);
+    return true;
+}
+
 static bool test_top_down_adapter(void)
 {
     fixture world = {{".....", ".....", ".....", ".....", "....."}};
@@ -221,6 +267,7 @@ static bool test_top_down_adapter(void)
 int main(void)
 {
     if (!test_navigation_and_visibility() || !test_world_records() ||
+        !test_invalid_records_are_safe() ||
         !test_top_down_adapter())
         return EXIT_FAILURE;
     (void)puts(

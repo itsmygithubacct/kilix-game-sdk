@@ -16,7 +16,7 @@ extern "C" {
 
 #define KILIX_WORLD_VERSION_MAJOR 0
 #define KILIX_WORLD_VERSION_MINOR 2
-#define KILIX_WORLD_VERSION_PATCH 0
+#define KILIX_WORLD_VERSION_PATCH 1
 #define KILIX_WORLD_NO_INDEX SIZE_MAX
 
 typedef enum kilix_world_result {
@@ -90,8 +90,9 @@ kilix_world_result kilix_world_search_bind(
     size_t cell_capacity);
 
 /*
- * Find a deterministic minimum-cost cardinal path. The returned path includes
- * start and goal. On NO_SPACE, *path_count reports the required cell count.
+ * Find a deterministic minimum-cost cardinal path. Start and goal must both
+ * be walkable. The returned path includes start and goal. On NO_SPACE,
+ * *path_count reports the required cell count.
  */
 kilix_world_result kilix_world_find_path(
     const kilix_world_grid *grid, kilix_world_cell start,
@@ -100,9 +101,9 @@ kilix_world_result kilix_world_find_path(
     uint32_t *total_cost);
 
 /*
- * Enumerate cells whose minimum cardinal movement cost is <= max_cost.
- * Results are ordered by cost, then row-major cell index. On NO_SPACE,
- * *cell_count reports the required count.
+ * Enumerate cells whose minimum cardinal movement cost is <= max_cost. The
+ * start cell must be walkable. Results are ordered by cost, then row-major
+ * cell index. On NO_SPACE, *cell_count reports the required count.
  */
 kilix_world_result kilix_world_reachable(
     const kilix_world_grid *grid, kilix_world_cell start,

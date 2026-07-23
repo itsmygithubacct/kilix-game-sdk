@@ -16,6 +16,11 @@ The initial API includes:
 - stable nearby interaction selection; and
 - reciprocal cross-map portal validation.
 
+The optional `libkilix-world-top-down.a` adapter converts cells to inset
+logical rectangles, maps logical points back to cells, and converts paths to
+cell-center points. It remains renderer-independent; callers can pass the
+results to `kilix-top-down-engine` or another drawing backend.
+
 The core has no renderer, terminal, audio, save, JSON, scripting, or operating
 system dependency. Both `kilix-top-down-engine` and
 `kilix-isometric-engine` can project its logical cells without making this

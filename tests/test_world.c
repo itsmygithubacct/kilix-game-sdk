@@ -1,4 +1,5 @@
 #include "kilix_world.h"
+#include "kilix_world_top_down.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -149,10 +150,55 @@ static bool test_world_records(void)
     return true;
 }
 
+static bool test_top_down_adapter(void)
+{
+    fixture world = {{".....", ".....", ".....", ".....", "....."}};
+    kilix_world_grid grid;
+    kilix_world_td_layout layout;
+    kilix_world_td_rect rect;
+    kilix_world_td_rect rects[3];
+    kilix_world_td_point points[3];
+    kilix_world_cell cell;
+    static const kilix_world_cell path[3] = {
+        {0, 0}, {1, 0}, {1, 1}
+    };
+    size_t count = 0u;
+
+    CHECK(kilix_world_grid_init(&grid, 5, 5, &world, walkable,
+                                NULL, opaque) == KILIX_WORLD_OK);
+    CHECK(kilix_world_td_layout_init(&layout, 8.0f, 12.0f,
+                                     16.0f, 20.0f));
+    CHECK(kilix_world_td_cell_rect(
+        &grid, &layout, (kilix_world_cell){2, 3}, 2.0f, &rect) ==
+        KILIX_WORLD_OK);
+    CHECK(rect.x == 42.0f && rect.y == 74.0f);
+    CHECK(rect.width == 12.0f && rect.height == 16.0f);
+    CHECK(kilix_world_td_point_cell(
+        &grid, &layout, 43.0f, 75.0f, &cell) == KILIX_WORLD_OK);
+    CHECK(cell.x == 2 && cell.y == 3);
+    CHECK(kilix_world_td_point_cell(
+        &grid, &layout, 7.0f, 12.0f, &cell) ==
+        KILIX_WORLD_OUT_OF_BOUNDS);
+    CHECK(kilix_world_td_cell_rects(
+        &grid, &layout, path, 3u, 1.0f, rects, 2u, &count) ==
+        KILIX_WORLD_NO_SPACE && count == 3u);
+    CHECK(kilix_world_td_cell_rects(
+        &grid, &layout, path, 3u, 1.0f, rects, 3u, &count) ==
+        KILIX_WORLD_OK && count == 3u);
+    CHECK(kilix_world_td_path_points(
+        &grid, &layout, path, 3u, points, 3u, &count) ==
+        KILIX_WORLD_OK && count == 3u);
+    CHECK(points[0].x == 16.0f && points[0].y == 22.0f);
+    CHECK(points[2].x == 32.0f && points[2].y == 42.0f);
+    return true;
+}
+
 int main(void)
 {
-    if (!test_navigation_and_visibility() || !test_world_records())
+    if (!test_navigation_and_visibility() || !test_world_records() ||
+        !test_top_down_adapter())
         return EXIT_FAILURE;
-    (void)puts("PASS kilix-world navigation visibility regions portals");
+    (void)puts(
+        "PASS kilix-world navigation visibility regions portals top-down");
     return EXIT_SUCCESS;
 }

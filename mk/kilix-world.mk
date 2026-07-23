@@ -1,4 +1,6 @@
-KILIX_WORLD_ROOT ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+ifndef KILIX_WORLD_ROOT
+KILIX_WORLD_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+endif
 KILIX_WORLD_BUILD_DIR ?= $(KILIX_WORLD_ROOT)/build
 KILIX_WORLD_LIB := $(KILIX_WORLD_BUILD_DIR)/libkilix-world.a
 KILIX_WORLD_TOP_DOWN_LIB := \

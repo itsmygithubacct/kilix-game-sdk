@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kilix-game-tools"
+version = "0.1.0"
+description = "Shared validation and deterministic release tools for Kilix games"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "itsmygithubacct", email = "itsmygithubacct@users.noreply.github.com"}
+]
+
+[project.scripts]
+kilix-game-tools = "kilix_game_tools.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

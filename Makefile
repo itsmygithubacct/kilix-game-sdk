@@ -25,7 +25,7 @@ KILIX_TD_SOFT_LIB := $(KILIX_TOP_DOWN_DIR)/build/libkilix-top-down-soft.a
 KILIX_TD_CORE_LIB := $(KILIX_TOP_DOWN_DIR)/build/libkilix-top-down-core.a
 SOFT_RASTER_LIB := $(SOFT_RASTER_DIR)/build/libsoft-raster.a
 
-.PHONY: all clean install sanitize test
+.PHONY: all clean install sanitize test test-fragment
 
 all: $(LIB)
 
@@ -53,9 +53,12 @@ $(NOALLOC_TEST): tests/test_noalloc.c $(LIB) $(KILIX_TD_SOFT_LIB) \
 		-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
 		-Wl,--wrap=free -o $@
 
-test: $(TEST) $(NOALLOC_TEST)
+test: $(TEST) $(NOALLOC_TEST) test-fragment
 	$(TEST)
 	$(NOALLOC_TEST)
+
+test-fragment:
+	tests/test_make_fragment.sh
 
 sanitize: $(KILIX_TD_SOFT_LIB) $(KILIX_TD_CORE_LIB) $(SOFT_RASTER_LIB) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) \

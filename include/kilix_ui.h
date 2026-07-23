@@ -13,7 +13,7 @@ extern "C" {
 
 #define KILIX_UI_VERSION_MAJOR 0
 #define KILIX_UI_VERSION_MINOR 2
-#define KILIX_UI_VERSION_PATCH 0
+#define KILIX_UI_VERSION_PATCH 1
 
 typedef enum kilix_ui_action {
     KILIX_UI_ACTION_NONE = 0,

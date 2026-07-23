@@ -31,7 +31,10 @@ make sanitize
 
 The recursive checkout pins `kilix-top-down-engine` and its raster dependency.
 Set `KILIX_TOP_DOWN_DIR` only when deliberately sharing another checked-out
-renderer. Applications normally link in this order:
+renderer. The reusable Make fragment forwards that renderer and its raster
+root into the recursive UI build and tracks every public renderer header, so
+the UI cannot silently compile against its nested fallback checkout.
+Applications normally link in this order:
 
 ```text
 game objects

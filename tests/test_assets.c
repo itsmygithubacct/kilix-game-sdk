@@ -146,6 +146,38 @@ static bool test_images(const char *png_path, const char *raw_path)
     return true;
 }
 
+static bool test_cache_pointer_stability(const char *directory,
+                                         const uint8_t pixels[16])
+{
+    kilix_asset_cache cache;
+    const kilix_asset_image *first = NULL;
+    const uint8_t *first_pixels = NULL;
+    char paths[10][1024];
+    size_t index;
+
+    CHECK(kilix_asset_cache_init(&cache, 10u, 4096u));
+    for (index = 0u; index < 10u; ++index) {
+        const kilix_asset_image *image = NULL;
+        CHECK(snprintf(paths[index], sizeof paths[index],
+                       "%s/cache-%zu.rgba", directory, index) > 0);
+        CHECK(write_bytes(paths[index], pixels, 16u));
+        CHECK(kilix_asset_cache_load_rgba(&cache, paths[index], 2u, 2u,
+                                          NULL, &image) == KILIX_ASSET_OK);
+        CHECK(image && image->pixels && image->pixels[0] == pixels[0]);
+        if (index == 0u) {
+            first = image;
+            first_pixels = image->pixels;
+        }
+        CHECK(first && first->pixels == first_pixels);
+        CHECK(first->width == 2u && first->height == 2u);
+        CHECK(first->pixels[15] == pixels[15]);
+    }
+    kilix_asset_cache_clear(&cache);
+    for (index = 0u; index < 10u; ++index)
+        CHECK(unlink(paths[index]) == 0);
+    return true;
+}
+
 static bool test_manifest(const char *path)
 {
     static const char json[] =
@@ -219,6 +251,9 @@ int main(void)
     }
     if (!test_paths(directory, raw_path)) failed = 1;
     if (!failed && !test_images(png_path, raw_path)) failed = 1;
+    if (!failed &&
+        !test_cache_pointer_stability(directory, raw_pixels))
+        failed = 1;
     if (!failed && !test_manifest(manifest_path)) failed = 1;
     (void)unlink(manifest_path);
     (void)unlink(raw_path);

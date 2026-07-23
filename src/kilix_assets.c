@@ -568,8 +568,15 @@ uint32_t kilix_asset_clip_frame(const kilix_asset_clip *clip, uint64_t tick)
 bool kilix_asset_cache_init(kilix_asset_cache *cache, size_t max_entries,
                             size_t max_bytes)
 {
-    if (!cache || max_entries == 0u || max_bytes == 0u) return false;
+    cache_entry *entries;
+    if (!cache || max_entries == 0u || max_bytes == 0u ||
+        max_entries > SIZE_MAX / sizeof *entries)
+        return false;
+    entries = calloc(max_entries, sizeof *entries);
+    if (!entries) return false;
     *cache = (kilix_asset_cache){0};
+    cache->entries = entries;
+    cache->entry_capacity = max_entries;
     cache->max_entries = max_entries;
     cache->max_bytes = max_bytes;
     return true;

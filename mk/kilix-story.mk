@@ -1,4 +1,6 @@
-KILIX_STORY_ROOT ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+ifndef KILIX_STORY_ROOT
+KILIX_STORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+endif
 KILIX_STORY_BUILD_DIR ?= $(KILIX_STORY_ROOT)/build
 KILIX_STORY_LIB := $(KILIX_STORY_BUILD_DIR)/libkilix-story.a
 KILIX_STORY_CPPFLAGS := -I$(KILIX_STORY_ROOT)/include

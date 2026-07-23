@@ -18,7 +18,7 @@ STATIC_LIB := $(BUILD_DIR)/lib$(PROJECT).a
 SHARED_LIB := $(BUILD_DIR)/lib$(PROJECT).so
 TEST := $(BUILD_DIR)/test-story
 
-.PHONY: all clean install sanitize test test-clang
+.PHONY: all clean install sanitize test test-clang test-make-fragment
 
 all: $(STATIC_LIB) $(SHARED_LIB)
 
@@ -37,8 +37,11 @@ $(SHARED_LIB): $(OBJECT)
 $(TEST): tests/test_story.c $(STATIC_LIB) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
-test: $(TEST)
+test: $(TEST) test-make-fragment
 	$(TEST)
+
+test-make-fragment:
+	$(MAKE) -f tests/test_make_fragment.mk check-root
 
 sanitize: | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) \

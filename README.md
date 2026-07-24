@@ -86,8 +86,10 @@ in tests.
 starts callbacks only after the terminal is active and always unwinds callback
 state, terminal modes, and the previous signal handlers in reverse order.
 SIGINT, SIGTERM, SIGHUP, and SIGQUIT request an orderly stop; SIGPIPE is
-temporarily ignored. Headless mode and a frame limit make the same host usable
-for smoke tests.
+temporarily ignored. SIGTSTP first restores the terminal and stops the process;
+after SIGCONT the host starts a fresh terminal session and resets its
+fixed-step clock so suspended wall time cannot advance simulation. Headless
+mode and a frame limit make the same host usable for smoke tests.
 
 Games provide start, ordered-input-event, fixed-step, render, and stop
 callbacks. They retain full ownership of simulation and framebuffer content.

@@ -164,6 +164,11 @@ static bool test_runtime_host_and_signals(void)
     CHECK(kilix_game_signals_requested(&signals));
     CHECK(kilix_game_signals_number(&signals) == SIGTERM);
     kilix_game_signals_restore(&signals);
+    CHECK(kilix_game_signals_install(&signals));
+    CHECK(raise(SIGTSTP) == 0);
+    CHECK(kilix_game_signals_suspend_requested(&signals));
+    CHECK(!kilix_game_signals_requested(&signals));
+    kilix_game_signals_restore(&signals);
 
     event.kind = KITTYIN_EVENT_KEY;
     event.data.key.key = (uint32_t)'Q';
@@ -182,6 +187,7 @@ static bool test_runtime_host_and_signals(void)
           EXIT_SUCCESS);
     CHECK(probe.starts == 1 && probe.renders == 2 && probe.stops == 1);
     CHECK(host.frame_count == 2u && !host.running && !host.terminal_started);
+    CHECK(host.suspension_count == 0u);
     return true;
 }
 

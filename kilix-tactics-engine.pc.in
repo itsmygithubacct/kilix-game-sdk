@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: kilix-tactics-engine
+Description: Deterministic isometric tactical spatial engine for Kilix games
+Version: 0.1.0
+Libs: -L${libdir} -lkilix-tactics-soft -lkilix-tactics-core
+Libs.private: -lsoft-raster -lm
+Cflags: -I${includedir}

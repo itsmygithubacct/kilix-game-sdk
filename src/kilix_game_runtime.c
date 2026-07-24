@@ -195,7 +195,7 @@ int kilix_game_host_run(kilix_game_host *host,
         if (kilix_game_signals_suspend_requested(&host->signals)) {
             host->signals.suspend_requested = 0;
             if (host->terminal_started) {
-                kittyts_stop(&host->terminal);
+                kittyts_suspend(&host->terminal);
                 host->terminal_started = false;
             }
             if (raise(SIGSTOP) != 0) {
@@ -265,7 +265,8 @@ int kilix_game_host_run(kilix_game_host *host,
 done:
     host->running = false;
     if (callback_started && callbacks->stop) callbacks->stop(host, user);
-    if (host->terminal_started) {
+    if (host->terminal_started ||
+        host->terminal.framebuffer_suspended) {
         kittyts_stop(&host->terminal);
         host->terminal_started = false;
     }

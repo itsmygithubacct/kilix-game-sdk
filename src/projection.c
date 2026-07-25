@@ -116,6 +116,51 @@ static uint8_t kt_effective_rotation(const kt_projection *projection,
     return rotation;
 }
 
+kt_status kt_rotate_extent(const kt_projection *projection,
+                           const kt_camera *camera, int32_t width,
+                           int32_t height, int32_t x, int32_t y,
+                           int32_t *out_x, int32_t *out_y)
+{
+    if (projection == NULL || camera == NULL || out_x == NULL ||
+        out_y == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    if (width <= 0 || height <= 0) {
+        return KT_ERR_RANGE;
+    }
+    kt_rotate_ccw(width, height, kt_effective_rotation(projection, camera), x,
+                  y, out_x, out_y);
+    return KT_OK;
+}
+
+kt_status kt_rotate_extent_inverse(const kt_projection *projection,
+                                   const kt_camera *camera, int32_t width,
+                                   int32_t height, int32_t view_x,
+                                   int32_t view_y, int32_t *out_x,
+                                   int32_t *out_y)
+{
+    uint8_t rotation;
+
+    if (projection == NULL || camera == NULL || out_x == NULL ||
+        out_y == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    if (width <= 0 || height <= 0) {
+        return KT_ERR_RANGE;
+    }
+    /* The inverse of a quarter turn is the complementary turn taken over the
+     * swapped extent. */
+    rotation = kt_effective_rotation(projection, camera);
+    if ((rotation & 1u) != 0u) {
+        kt_rotate_ccw(height, width, (uint8_t)((4u - rotation) & 3u), view_x,
+                      view_y, out_x, out_y);
+    } else {
+        kt_rotate_ccw(width, height, (uint8_t)((4u - rotation) & 3u), view_x,
+                      view_y, out_x, out_y);
+    }
+    return KT_OK;
+}
+
 kt_status kt_rotate_to_view(const kt_map *map, const kt_projection *projection,
                             const kt_camera *camera, kt_cell_point world,
                             kt_cell_point *out_view)
@@ -130,9 +175,10 @@ kt_status kt_rotate_to_view(const kt_map *map, const kt_projection *projection,
     if (!kt_map_contains(map, world)) {
         return KT_ERR_RANGE;
     }
-    kt_rotate_ccw(map->width, map->height, kt_effective_rotation(projection,
-                                                                camera),
-                  world.x, world.y, &vx, &vy);
+    if (kt_rotate_extent(projection, camera, map->width, map->height, world.x,
+                         world.y, &vx, &vy) != KT_OK) {
+        return KT_ERR_STATE;
+    }
     out_view->x = vx;
     out_view->y = vy;
     out_view->z = world.z;
@@ -143,7 +189,6 @@ kt_status kt_rotate_to_world(const kt_map *map, const kt_projection *projection,
                              const kt_camera *camera, kt_cell_point view,
                              kt_cell_point *out_world)
 {
-    uint8_t rotation;
     int32_t wx;
     int32_t wy;
 
@@ -153,13 +198,9 @@ kt_status kt_rotate_to_world(const kt_map *map, const kt_projection *projection,
     }
     /* The inverse of a quarter turn is the complementary quarter turn taken
      * over the swapped extent. */
-    rotation = kt_effective_rotation(projection, camera);
-    if ((rotation & 1u) != 0u) {
-        kt_rotate_ccw(map->height, map->width, (uint8_t)((4u - rotation) & 3u),
-                      view.x, view.y, &wx, &wy);
-    } else {
-        kt_rotate_ccw(map->width, map->height, (uint8_t)((4u - rotation) & 3u),
-                      view.x, view.y, &wx, &wy);
+    if (kt_rotate_extent_inverse(projection, camera, map->width, map->height,
+                                 view.x, view.y, &wx, &wy) != KT_OK) {
+        return KT_ERR_STATE;
     }
     out_world->x = wx;
     out_world->y = wy;

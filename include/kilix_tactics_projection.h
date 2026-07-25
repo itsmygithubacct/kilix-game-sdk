@@ -61,6 +61,27 @@ void kt_camera_init(kt_camera *camera);
  * coordinates never rotate; simulation, paths, sight, and saves stay in
  * world space and only presentation and its inverse use this.
  */
+/*
+ * Map-free quarter-turn remap over an explicit grid extent.
+ *
+ * Rotation depends only on the extent, never on cell contents, and a renderer
+ * legitimately transforms positions that are not cells at all -- a projectile
+ * in flight, a camera clamp, a position just outside the grid. Those callers
+ * must not be forced to own a map or to stay in bounds, so this is pure
+ * arithmetic and does not range-check.
+ *
+ * kt_rotate_to_view() is the bounds-checked cell wrapper around this.
+ */
+kt_status kt_rotate_extent(const kt_projection *projection,
+                           const kt_camera *camera, int32_t width,
+                           int32_t height, int32_t x, int32_t y,
+                           int32_t *out_x, int32_t *out_y);
+kt_status kt_rotate_extent_inverse(const kt_projection *projection,
+                                   const kt_camera *camera, int32_t width,
+                                   int32_t height, int32_t view_x,
+                                   int32_t view_y, int32_t *out_x,
+                                   int32_t *out_y);
+
 kt_status kt_rotate_to_view(const kt_map *map, const kt_projection *projection,
                             const kt_camera *camera, kt_cell_point world,
                             kt_cell_point *out_view);

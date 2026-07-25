@@ -147,7 +147,7 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
                               kt_cell_point to, const kt_sight_hooks *hooks,
                               kt_channel channel, kt_cell_point *out_cells,
                               size_t capacity, size_t *out_count,
-                              bool *out_blocked)
+                              bool *out_blocked, bool geometry_only)
 {
     int32_t dx = to.x - from.x;
     int32_t dy = to.y - from.y;
@@ -193,7 +193,7 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
             }
             break;
         }
-        if (kt_sight_blocked_step(map, previous, at, channel)) {
+        if (!geometry_only && kt_sight_blocked_step(map, previous, at, channel)) {
             if (out_blocked != NULL) {
                 *out_blocked = true;
             }
@@ -218,7 +218,8 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
                 break;
             }
             cell = kt_map_cell_const(map, sealed);
-            if (cell != NULL && (cell->flags & KT_CELL_HAS_FLOOR) != 0u &&
+            if (!geometry_only && cell != NULL &&
+                (cell->flags & KT_CELL_HAS_FLOOR) != 0u &&
                 (cell->flags & KT_CELL_LEVEL_LINK) == 0u) {
                 if (out_blocked != NULL) {
                     *out_blocked = true;
@@ -229,13 +230,13 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
         }
 
         if (index < steps) {
-            if (kt_map_cell_blocks(map, at, channel)) {
+            if (!geometry_only && kt_map_cell_blocks(map, at, channel)) {
                 if (out_blocked != NULL) {
                     *out_blocked = true;
                 }
                 break;
             }
-            if (hooks != NULL && hooks->veto != NULL &&
+            if (!geometry_only && hooks != NULL && hooks->veto != NULL &&
                 hooks->veto(hooks->user, at)) {
                 if (out_blocked != NULL) {
                     *out_blocked = true;
@@ -271,8 +272,8 @@ bool kt_sight_line(const kt_map *map, const kt_sight_hooks *hooks,
     if (kt_cell_point_equal(from, to)) {
         return true;
     }
-    if (kt_walk_line(map, from, to, hooks, channel, NULL, 0u, NULL, &blocked) !=
-        KT_OK) {
+    if (kt_walk_line(map, from, to, hooks, channel, NULL, 0u, NULL, &blocked,
+                     false) != KT_OK) {
         return false;
     }
     return !blocked;
@@ -290,7 +291,22 @@ kt_status kt_sight_trace(const kt_map *map, kt_cell_point from,
         return KT_ERR_RANGE;
     }
     return kt_walk_line(map, from, to, NULL, KT_CHANNEL_SIGHT, out_cells,
-                        capacity, out_count, NULL);
+                        capacity, out_count, NULL, false);
+}
+
+kt_status kt_ray_cells(const kt_map *map, kt_cell_point from, kt_cell_point to,
+                       kt_cell_point *out_cells, size_t capacity,
+                       size_t *out_count)
+{
+    if (map == NULL || out_count == NULL ||
+        (out_cells == NULL && capacity != 0u)) {
+        return KT_ERR_ARGUMENT;
+    }
+    if (!kt_map_contains(map, from) || !kt_map_contains(map, to)) {
+        return KT_ERR_RANGE;
+    }
+    return kt_walk_line(map, from, to, NULL, KT_CHANNEL_SIGHT, out_cells,
+                        capacity, out_count, NULL, true);
 }
 
 static kt_cover_level kt_cover_on(const kt_cell *cell, kt_direction dir)

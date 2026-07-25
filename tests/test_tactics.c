@@ -974,6 +974,89 @@ static void test_edge_table_contract(void)
     }
 }
 
+static void test_ray_geometry(void)
+{
+    kt_map map;
+    kt_cell_point ray[64];
+    kt_cell_point traced[64];
+    size_t ray_count = 0u;
+    size_t traced_count = 0u;
+
+    printf("pure ray geometry\n");
+    kt_map_init(&map, NAV_W, NAV_H, 1, g_nav_cells,
+                sizeof(g_nav_cells) / sizeof(g_nav_cells[0]));
+    for (size_t i = 0; i < kt_map_cell_count(&map); ++i) {
+        g_nav_cells[i].move_cost = 4u;
+        g_nav_cells[i].wall[0] = 0u;
+        g_nav_cells[i].wall[1] = 0u;
+        g_nav_cells[i].occupy = 0u;
+        g_nav_cells[i].flags = 0u;
+        g_nav_cells[i].cover_half = 0u;
+        g_nav_cells[i].cover_full = 0u;
+    }
+    kt_map_validate(&map);
+
+    /* With nothing in the way both agree and report every intermediate cell. */
+    check_eq(kt_ray_cells(&map, kt_cell_point_make(1, 5, 0),
+                          kt_cell_point_make(9, 5, 0), ray, 64u, &ray_count),
+             KT_OK, "ray ok");
+    check_eq((int64_t)ray_count, 7, "ray excludes endpoints");
+    check_eq(kt_sight_trace(&map, kt_cell_point_make(1, 5, 0),
+                            kt_cell_point_make(9, 5, 0), traced, 64u,
+                            &traced_count),
+             KT_OK, "trace ok");
+    check_eq((int64_t)traced_count, (int64_t)ray_count,
+             "unobstructed trace equals the ray");
+    check(memcmp(ray, traced, ray_count * sizeof(ray[0])) == 0,
+          "unobstructed cells identical");
+
+    /* Put an opaque occupant midway. The trace must stop; the ray must not. */
+    kt_map_cell(&map, kt_cell_point_make(5, 5, 0))->occupy =
+        KT_OCCUPY_BLOCKS_SIGHT;
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(1, 5, 0),
+                         kt_cell_point_make(9, 5, 0), KT_CHANNEL_SIGHT),
+          "sight is blocked");
+    kt_sight_trace(&map, kt_cell_point_make(1, 5, 0),
+                   kt_cell_point_make(9, 5, 0), traced, 64u, &traced_count);
+    check_eq((int64_t)traced_count, 3, "trace stops before the blocker");
+    kt_ray_cells(&map, kt_cell_point_make(1, 5, 0), kt_cell_point_make(9, 5, 0),
+                 ray, 64u, &ray_count);
+    check_eq((int64_t)ray_count, 7, "ray ignores the blocker");
+
+    /*
+     * The reason this function exists: a rule that ACCUMULATES along the ray.
+     * A per-cell boolean veto cannot stop at "summed density >= threshold",
+     * which is exactly C-COM's smoke rule. Here density 4 per cell with a
+     * threshold of 10 must stop on the third smoky cell, not the first.
+     */
+    {
+        int accumulated = 0;
+        size_t stopped_at = ray_count;
+        size_t i;
+
+        for (i = 0u; i < ray_count; ++i) {
+            accumulated += 4;
+            if (accumulated >= 10) {
+                stopped_at = i;
+                break;
+            }
+        }
+        check_eq((int64_t)stopped_at, 2, "accumulator stops on the third cell");
+    }
+
+    kt_map_cell(&map, kt_cell_point_make(5, 5, 0))->occupy = 0u;
+
+    /* Capacity is refused rather than silently truncated. */
+    {
+        kt_cell_point tiny[2];
+        size_t n = 0u;
+
+        check_eq(kt_ray_cells(&map, kt_cell_point_make(1, 5, 0),
+                              kt_cell_point_make(9, 5, 0), tiny, 2u, &n),
+                 KT_ERR_CAPACITY, "ray capacity enforced");
+    }
+}
+
 static kt_draw_item g_draw_items[512];
 
 static void test_draw_queue(void)
@@ -1076,6 +1159,7 @@ int main(void)
     test_sight_levels();
     test_cover();
     test_edge_table_contract();
+    test_ray_geometry();
     test_draw_queue();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

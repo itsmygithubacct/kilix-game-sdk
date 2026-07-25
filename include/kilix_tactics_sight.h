@@ -103,13 +103,32 @@ bool kt_sight_line(const kt_map *map, const kt_sight_hooks *hooks,
                    kt_cell_point from, kt_cell_point to, kt_channel channel);
 
 /*
- * Emit the traced cells, endpoints excluded, so a game can accumulate its
- * own per-cell effects along the ray. Reports how many were written and
- * returns KT_ERR_CAPACITY if the buffer was too small.
+ * Emit the traced cells, endpoints excluded, stopping where sight stops.
+ * Reports how many were written and returns KT_ERR_CAPACITY if the buffer was
+ * too small.
  */
 kt_status kt_sight_trace(const kt_map *map, kt_cell_point from,
                          kt_cell_point to, kt_cell_point *out_cells,
                          size_t capacity, size_t *out_count);
+
+/*
+ * Pure ray geometry: every cell the ray passes through, endpoints excluded,
+ * with NO blocking applied. Same frozen stepping and level interpolation as
+ * the sight trace.
+ *
+ * This is the escape hatch for rules the engine deliberately does not model.
+ * A per-cell boolean veto cannot express a rule that ACCUMULATES along a ray
+ * -- C-COM's sight stops once summed smoke density crosses a threshold, and
+ * its shot accuracy penalty counts how many dense cells were crossed. Both
+ * need the whole ray up front, so the engine hands over the geometry and the
+ * game applies its own predicate and accumulator.
+ *
+ * Prefer kt_sight_line() when the engine's compiled facts are sufficient;
+ * reach for this only when they are not.
+ */
+kt_status kt_ray_cells(const kt_map *map, kt_cell_point from, kt_cell_point to,
+                       kt_cell_point *out_cells, size_t capacity,
+                       size_t *out_count);
 
 typedef enum kt_cover_level {
     KT_COVER_NONE = 0,

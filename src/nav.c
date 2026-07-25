@@ -128,12 +128,8 @@ static uint64_t kt_node_key(const kt_nav_node *node, const kt_nav_hooks *hooks)
 
 size_t kt_nav_required_heap(const kt_map *map)
 {
-    size_t cells = kt_map_cell_count(map);
-
-    if (cells == 0u) {
-        return 0u;
-    }
-    return cells * (size_t)KT_DIR_COUNT + 1u;
+    /* One entry per node in both disciplines. */
+    return kt_map_cell_count(map);
 }
 
 static void kt_heap_place(kt_nav_workspace *workspace, size_t slot,
@@ -258,13 +254,12 @@ static kt_status kt_heap_push(kt_nav_workspace *workspace, size_t cell_index,
         return KT_ERR_CAPACITY;
     }
     kt_heap_place(workspace, workspace->heap_count, (uint32_t)cell_index);
-    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
-        ++workspace->heap_count;
-        kt_heap_up_legacy(workspace, workspace->heap_count - 1u, hooks);
-        return KT_OK;
-    }
-    kt_heap_up(workspace, workspace->heap_count, hooks);
     ++workspace->heap_count;
+    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
+        kt_heap_up_legacy(workspace, workspace->heap_count - 1u, hooks);
+    } else {
+        kt_heap_up(workspace, workspace->heap_count - 1u, hooks);
+    }
     return KT_OK;
 }
 
@@ -324,15 +319,10 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
     if (cells == 0u || workspace->node_capacity < cells) {
         return KT_ERR_CAPACITY;
     }
-    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
-        /* One entry per node, so the heap needs only one slot per cell -- but
-         * the position index is mandatory. */
-        if (workspace->heap_pos == NULL ||
-            workspace->heap_pos_capacity < cells ||
-            workspace->heap_capacity < cells) {
-            return KT_ERR_CAPACITY;
-        }
-    } else if (workspace->heap_capacity < kt_nav_required_heap(map)) {
+    /* Both disciplines keep one entry per node, so the heap needs one slot per
+     * cell and the position index is mandatory. */
+    if (workspace->heap_pos == NULL || workspace->heap_pos_capacity < cells ||
+        workspace->heap_capacity < cells) {
         return KT_ERR_CAPACITY;
     }
     if (hooks->min_step_cost == 0u) {
@@ -434,14 +424,30 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
 
                 neighbour->sequence = workspace->sequence++;
                 neighbour->state = KT_NODE_OPEN;
-                if (hooks->order == KT_NAV_ORDER_DECREASE_KEY && was_open) {
-                    /* One entry per node: reposition rather than duplicate.
-                     * The estimate is not recomputed, matching the reference
+                if (was_open) {
+                    /*
+                     * Reposition the existing entry rather than queueing a
+                     * second one. Lazy duplicates cannot work here: a heap
+                     * entry stores only the cell index and the comparator
+                     * reads the node's CURRENT cost, so improving an open
+                     * node silently mutates the key of every entry naming it,
+                     * breaking the invariant with no re-sift. Measured
+                     * consequence: a node settling at cost 12 ahead of one at
+                     * cost 11, which risks closing a node before its cost is
+                     * final.
+                     *
+                     * The estimate is not recomputed, matching both reference
                      * implementations -- for a consistent heuristic it is a
-                     * function of the cell and goal alone, so it is unchanged
-                     * anyway. */
-                    kt_heap_up_legacy(workspace,
-                                      workspace->heap_pos[dest_index], hooks);
+                     * function of the cell and goal alone.
+                     */
+                    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
+                        kt_heap_up_legacy(workspace,
+                                          workspace->heap_pos[dest_index],
+                                          hooks);
+                    } else {
+                        kt_heap_up(workspace, workspace->heap_pos[dest_index],
+                                   hooks);
+                    }
                     continue;
                 }
             }

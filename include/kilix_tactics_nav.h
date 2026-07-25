@@ -77,15 +77,12 @@ typedef enum kt_nav_tiebreak {
  * under SEQUENCE, which its replay and render proofs would reject.
  */
 typedef enum kt_nav_order {
-    /* Lazy duplicate pushes, ties broken explicitly. Needs the larger heap
-     * reported by kt_nav_required_heap(). */
+    /* Ties broken explicitly by insertion order, then cell index. */
     KT_NAV_ORDER_SEQUENCE = 0,
     /*
      * One heap entry per node with decrease-key, ties resolved by array
      * layout: sift-up stops when the parent compares less-or-equal, and
      * sift-down prefers the left child and refuses to promote an equal one.
-     * Requires a heap_pos array via kt_nav_workspace_init_indexed(), and needs
-     * only one heap slot per cell.
      */
     KT_NAV_ORDER_DECREASE_KEY
 } kt_nav_order;
@@ -108,11 +105,13 @@ void kt_nav_hooks_init(kt_nav_hooks *hooks);
  * whole grid per query, which matters at C-COM's 6400 cells.
  */
 /*
- * Minimum heap storage for a map. The search pushes a fresh entry on every
- * improving relaxation rather than repositioning the existing one, so a node
- * with up to KT_DIR_COUNT predecessors can be queued that many times. Sizing
- * a heap to the cell count can therefore overflow and surface as a spurious
- * "no route".
+ * Minimum heap storage for a map: one slot per cell.
+ *
+ * Both disciplines keep exactly one heap entry per node and reposition it on
+ * improvement. Queueing a duplicate instead is not viable here -- an entry
+ * stores only a cell index and the comparator reads the node's CURRENT cost,
+ * so improving an open node mutates the key of every entry naming it and
+ * breaks the invariant with no re-sift.
  */
 size_t kt_nav_required_heap(const kt_map *map);
 
@@ -145,8 +144,10 @@ kt_status kt_nav_workspace_init(kt_nav_workspace *workspace, kt_nav_node *nodes,
                                 size_t heap_capacity);
 
 /*
- * As above, plus the heap-position index that KT_NAV_ORDER_DECREASE_KEY needs.
- * heap and heap_pos each need one slot per map cell in that mode.
+ * The full form. heap and heap_pos each need one slot per map cell. The
+ * position index is REQUIRED by both disciplines; kt_nav_workspace_init()
+ * above is a convenience that leaves it unset and must be followed by this
+ * call before searching.
  */
 kt_status kt_nav_workspace_init_indexed(kt_nav_workspace *workspace,
                                         kt_nav_node *nodes,

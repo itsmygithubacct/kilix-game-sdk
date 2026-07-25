@@ -577,7 +577,8 @@ static kt_cell g_nav_cells[NAV_W * NAV_H];
 static kt_nav_node g_nav_nodes[NAV_W * NAV_H];
 /* Sized by kt_nav_required_heap(): the search pushes a fresh entry per
  * improving relaxation, so a node can be queued once per predecessor. */
-static uint32_t g_nav_heap[NAV_W * NAV_H * KT_DIR_COUNT + 1];
+static uint32_t g_nav_heap[NAV_W * NAV_H];
+static uint32_t g_nav_heap_pos[NAV_W * NAV_H];
 
 /*
  * A deliberately plain step-cost hook: the engine must not need to know
@@ -615,10 +616,11 @@ static void test_nav(void)
         g_nav_cells[i].move_cost = 4u;
     }
     kt_map_validate(&map);
-    check_eq(kt_nav_workspace_init(&workspace, g_nav_nodes,
-                                   sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
-                                   g_nav_heap,
-                                   sizeof(g_nav_heap) / sizeof(g_nav_heap[0])),
+    check_eq(kt_nav_workspace_init_indexed(
+        &workspace, g_nav_nodes,
+        sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]), g_nav_heap,
+        sizeof(g_nav_heap) / sizeof(g_nav_heap[0]), g_nav_heap_pos,
+        sizeof(g_nav_heap_pos) / sizeof(g_nav_heap_pos[0])),
              KT_OK, "workspace init");
     kt_nav_hooks_init(&hooks);
     hooks.step_cost = nav_step;
@@ -1240,10 +1242,11 @@ static void test_priority_and_tiebreak(void)
     }
     kt_map_validate(&map);
 
-    kt_nav_workspace_init(&workspace, g_nav_nodes,
-                          sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
-                          g_nav_heap,
-                          sizeof(g_nav_heap) / sizeof(g_nav_heap[0]));
+    kt_nav_workspace_init_indexed(
+        &workspace, g_nav_nodes,
+        sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]), g_nav_heap,
+        sizeof(g_nav_heap) / sizeof(g_nav_heap[0]), g_nav_heap_pos,
+        sizeof(g_nav_heap_pos) / sizeof(g_nav_heap_pos[0]));
     kt_nav_hooks_init(&hooks);
     hooks.step_cost = nav_step;
     hooks.user = &map;
@@ -1285,13 +1288,14 @@ static void test_priority_and_tiebreak(void)
               "cell-index tiebreak is deterministic");
     }
 
-    /* The heap requirement is reported, and an undersized heap is refused. */
+    /* One entry per node, so the heap needs exactly one slot per cell. */
     check_eq((int64_t)kt_nav_required_heap(&map),
-             (int64_t)(kt_map_cell_count(&map) * KT_DIR_COUNT + 1u),
-             "required heap reported");
+             (int64_t)kt_map_cell_count(&map), "required heap reported");
     {
         kt_nav_workspace small;
 
+        /* The position index is mandatory: without it the heap cannot
+         * reposition an improved node, which is what keeps the invariant. */
         kt_nav_workspace_init(&small, g_nav_nodes,
                               sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
                               g_nav_heap, kt_map_cell_count(&map));
@@ -1299,7 +1303,7 @@ static void test_priority_and_tiebreak(void)
                                   kt_cell_point_make(1, 1, 0),
                                   kt_cell_point_make(9, 7, 0), 1000u, &a),
                  KT_ERR_CAPACITY,
-                 "cell-count heap refused up front, not mid-search");
+                 "missing position index refused up front");
     }
 }
 
@@ -1383,10 +1387,11 @@ static void test_reachable_collect(void)
         g_nav_cells[i].move_cost = 4u;
     }
     kt_map_validate(&map);
-    kt_nav_workspace_init(&workspace, g_nav_nodes,
-                          sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
-                          g_nav_heap,
-                          sizeof(g_nav_heap) / sizeof(g_nav_heap[0]));
+    kt_nav_workspace_init_indexed(
+        &workspace, g_nav_nodes,
+        sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]), g_nav_heap,
+        sizeof(g_nav_heap) / sizeof(g_nav_heap[0]), g_nav_heap_pos,
+        sizeof(g_nav_heap_pos) / sizeof(g_nav_heap_pos[0]));
     kt_nav_hooks_init(&hooks);
     hooks.step_cost = nav_step;
     hooks.user = &map;

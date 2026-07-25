@@ -63,7 +63,8 @@ enum { PCELLS = PW * PH * PD };
 static kt_cell g_cells[PCELLS];
 static kt_nav_node g_nodes[PCELLS];
 /* kt_nav_required_heap(): one queue slot per predecessor per cell. */
-static uint32_t g_heap[PCELLS * KT_DIR_COUNT + 1];
+static uint32_t g_heap[PCELLS];
+static uint32_t g_heap_pos[PCELLS];
 static uint32_t g_heap_pos[PCELLS];
 
 /* Reference Dijkstra state, deliberately a separate simple implementation. */
@@ -249,8 +250,8 @@ static void test_astar_optimality(void)
          * path would otherwise surface only as a game's replay drifting.
          */
         if ((iteration % 2) == 0) {
-            kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
-                                  sizeof(g_heap) / sizeof(g_heap[0]));
+            kt_nav_workspace_init_indexed(&workspace, g_nodes, PCELLS, g_heap,
+                                      PCELLS, g_heap_pos, PCELLS);
         } else {
             kt_nav_workspace_init_indexed(&workspace, g_nodes, PCELLS, g_heap,
                                           sizeof(g_heap) / sizeof(g_heap[0]),
@@ -370,8 +371,8 @@ static void test_reachable_agrees(void)
         ctx.map = &map;
         ctx.allow_diagonal = true;
         ctx.level_links = false;
-        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
-                              sizeof(g_heap) / sizeof(g_heap[0]));
+        kt_nav_workspace_init_indexed(&workspace, g_nodes, PCELLS, g_heap,
+                                      PCELLS, g_heap_pos, PCELLS);
         kt_nav_hooks_init(&hooks);
         hooks.step_cost = prop_step;
         hooks.user = &ctx;
@@ -608,6 +609,126 @@ static void test_queue_is_permutation(void)
     g_case = NULL;
 }
 
+
+/* ---- property 6: settle-ordered collection is deterministic and ordered ---- */
+static void test_collect_properties(void)
+{
+    int iteration;
+    static kt_cell_point first[PCELLS];
+    static kt_cell_point again[PCELLS];
+
+    printf("settle-ordered collection\n");
+    for (iteration = 0; iteration < 25; ++iteration) {
+        kt_map map;
+        kt_nav_workspace workspace;
+        kt_nav_hooks hooks;
+        step_ctx ctx;
+        size_t count_a = 0u;
+        size_t count_b = 0u;
+        size_t i;
+        char label[64];
+
+        g_state = UINT64_C(0xC01AEC) + (uint64_t)iteration;
+        snprintf(label, sizeof(label), "collect iter %d", iteration);
+        g_case = label;
+
+        {
+            unsigned walls = 10u + next_below(15u);
+            unsigned blocks = 5u + next_below(10u);
+
+            build_random_map(&map, walls, blocks, 1);
+        }
+        kt_map_cell(&map, kt_cell_point_make(1, 1, 0))->move_cost = 4u;
+        kt_map_validate(&map);
+        ctx.map = &map;
+        ctx.allow_diagonal = true;
+        ctx.level_links = false;
+
+        kt_nav_workspace_init_indexed(&workspace, g_nodes, PCELLS, g_heap,
+                                      PCELLS, g_heap_pos, PCELLS);
+        kt_nav_hooks_init(&hooks);
+        hooks.step_cost = prop_step;
+        hooks.user = &ctx;
+        hooks.min_step_cost = 2u;
+
+        check(kt_nav_reachable_collect(&map, &workspace, &hooks,
+                                       kt_cell_point_make(1, 1, 0), 40u, first,
+                                       PCELLS, &count_a) == KT_OK,
+              "collect ok");
+        check(kt_nav_reachable_collect(&map, &workspace, &hooks,
+                                       kt_cell_point_make(1, 1, 0), 40u, again,
+                                       PCELLS, &count_b) == KT_OK,
+              "recollect ok");
+        check(count_a == count_b, "collection count is stable");
+        check(memcmp(first, again, count_a * sizeof(first[0])) == 0,
+              "collection ORDER is stable, not just the set");
+
+        /* Non-decreasing cost is what makes it a settle order. */
+        for (i = 1u; i < count_a; ++i) {
+            uint32_t prev = kt_nav_cost_to(&map, &workspace, first[i - 1u]);
+            uint32_t cur = kt_nav_cost_to(&map, &workspace, first[i]);
+
+            check(prev <= cur, "settle order is non-decreasing in cost");
+        }
+    }
+    g_case = NULL;
+}
+
+/* ---- property 7: both depth orders are total over distinct cells ---- */
+static void test_depth_order_totality(void)
+{
+    static int64_t keys[PCELLS];
+    int mode;
+
+    printf("depth-order totality\n");
+    for (mode = 0; mode < 2; ++mode) {
+        kt_map map;
+        kt_projection projection;
+        kt_camera camera;
+        size_t count;
+        size_t i;
+        size_t j;
+        int rotation;
+
+        g_state = UINT64_C(0xDEBD) + (uint64_t)mode;
+        build_random_map(&map, 0u, 0u, PD);
+        kt_map_validate(&map);
+        kt_projection_init(&projection, 32, 16, 24, KT_ROTATE_CCW);
+        projection.depth_order = mode == 0 ? KT_DEPTH_DIAGONAL_MAJOR
+                                           : KT_DEPTH_LEVEL_MAJOR;
+        kt_camera_init(&camera);
+        count = kt_map_cell_count(&map);
+
+        for (rotation = 0; rotation < 4; ++rotation) {
+            camera.rotation = (uint8_t)rotation;
+            for (i = 0u; i < count; ++i) {
+                kt_cell_point p;
+
+                kt_map_point_from_index(&map, i, &p);
+                kt_depth_key(&map, &projection, &camera, p, &keys[i]);
+            }
+            /*
+             * Distinct cells must get distinct keys, or paint order falls
+             * through to submission order and the queue hash stops being a
+             * usable golden. Checked by sorting rather than O(n^2).
+             */
+            for (i = 0u; i < count; ++i) {
+                for (j = i + 1u; j < count; ++j) {
+                    if (keys[i] == keys[j]) {
+                        fail("two distinct cells share a depth key");
+                        i = count;
+                        break;
+                    }
+                }
+                if (i >= count) {
+                    break;
+                }
+            }
+            ++g_checks;
+        }
+    }
+}
+
 int main(void)
 {
     test_astar_optimality();
@@ -615,6 +736,8 @@ int main(void)
     test_pick_inverts_project();
     test_sight_symmetry();
     test_queue_is_permutation();
+    test_collect_properties();
+    test_depth_order_totality();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

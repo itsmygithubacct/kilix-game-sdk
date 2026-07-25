@@ -29,11 +29,26 @@ typedef enum kt_rotation_sense {
     KT_ROTATE_CW = 1
 } kt_rotation_sense;
 
+/*
+ * Painter traversal order. The two are NOT interchangeable: they invert for
+ * cross-level pairs whose sprites overlap, which is visible wherever a raised
+ * structure stands next to a lower one.
+ */
+typedef enum kt_depth_order {
+    /* Farther diagonal rows first, then level, then west-to-east. Matches a
+     * renderer that walks the board diagonally. The default. */
+    KT_DEPTH_DIAGONAL_MAJOR = 0,
+    /* All of one level before any of the next. Matches a renderer whose
+     * terrain pass is `for z { for x { for y } }`, which is C-COM's. */
+    KT_DEPTH_LEVEL_MAJOR
+} kt_depth_order;
+
 typedef struct kt_projection {
     int32_t tile_width;      /* floor diamond width, px  (both games: 32)  */
     int32_t tile_height;     /* floor diamond height, px (both games: 16)  */
     int32_t level_step;      /* px per level (C-COM 24, KAT 12)            */
     kt_rotation_sense sense;
+    kt_depth_order depth_order;
 } kt_projection;
 
 typedef struct kt_camera {

@@ -1303,6 +1303,163 @@ static void test_priority_and_tiebreak(void)
     }
 }
 
+
+static void test_depth_order_modes(void)
+{
+    kt_map map;
+    kt_projection diagonal;
+    kt_projection level_major;
+    kt_camera camera;
+    int64_t a_diag, b_diag, a_level, b_level;
+    /* The counterexample from reconnaissance: a raised cell and a nearer
+     * lower cell whose sprites overlap. The two orders must disagree. */
+    kt_cell_point a = kt_cell_point_make(5, 5, 1);
+    kt_cell_point b = kt_cell_point_make(6, 5, 0);
+
+    printf("depth order modes\n");
+    kt_map_init(&map, CCOM_W, CCOM_H, CCOM_D, g_ccom_cells,
+                sizeof(g_ccom_cells) / sizeof(g_ccom_cells[0]));
+    kt_map_validate(&map);
+    kt_projection_init(&diagonal, 32, 16, 24, KT_ROTATE_CCW);
+    kt_projection_init(&level_major, 32, 16, 24, KT_ROTATE_CCW);
+    level_major.depth_order = KT_DEPTH_LEVEL_MAJOR;
+    kt_camera_init(&camera);
+
+    check_eq(diagonal.depth_order, KT_DEPTH_DIAGONAL_MAJOR,
+             "diagonal-major is the default");
+
+    kt_depth_key(&map, &diagonal, &camera, a, &a_diag);
+    kt_depth_key(&map, &diagonal, &camera, b, &b_diag);
+    kt_depth_key(&map, &level_major, &camera, a, &a_level);
+    kt_depth_key(&map, &level_major, &camera, b, &b_level);
+
+    /* Diagonal-major: (5+5)=10 sorts before (6+5)=11, so the raised cell
+     * paints FIRST. Level-major: z=0 paints entirely before z=1, so it paints
+     * LAST. Inverted, which is exactly why the mode has to exist. */
+    check(a_diag < b_diag, "diagonal-major paints the raised cell first");
+    check(a_level > b_level, "level-major paints the raised cell last");
+
+    /* Level-major must group every cell of a level together. */
+    {
+        int64_t max_low = INT64_MIN;
+        int64_t min_high = INT64_MAX;
+        int x, y;
+
+        for (y = 0; y < CCOM_H; ++y) {
+            for (x = 0; x < CCOM_W; ++x) {
+                int64_t low, high;
+
+                kt_depth_key(&map, &level_major, &camera,
+                             kt_cell_point_make(x, y, 0), &low);
+                kt_depth_key(&map, &level_major, &camera,
+                             kt_cell_point_make(x, y, 1), &high);
+                if (low > max_low) {
+                    max_low = low;
+                }
+                if (high < min_high) {
+                    min_high = high;
+                }
+            }
+        }
+        check(max_low < min_high,
+              "level-major paints all of level 0 before any of level 1");
+    }
+}
+
+static void test_reachable_collect(void)
+{
+    kt_map map;
+    kt_nav_workspace workspace;
+    kt_nav_hooks hooks;
+    kt_cell_point collected[64];
+    size_t count = 0u;
+    size_t i;
+
+    printf("settle-ordered reachability collection\n");
+    kt_map_init(&map, NAV_W, NAV_H, 1, g_nav_cells,
+                sizeof(g_nav_cells) / sizeof(g_nav_cells[0]));
+    for (i = 0; i < kt_map_cell_count(&map); ++i) {
+        memset(&g_nav_cells[i], 0, sizeof(g_nav_cells[i]));
+        g_nav_cells[i].move_cost = 4u;
+    }
+    kt_map_validate(&map);
+    kt_nav_workspace_init(&workspace, g_nav_nodes,
+                          sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
+                          g_nav_heap,
+                          sizeof(g_nav_heap) / sizeof(g_nav_heap[0]));
+    kt_nav_hooks_init(&hooks);
+    hooks.step_cost = nav_step;
+    hooks.user = &map;
+    hooks.min_step_cost = 4u;
+
+    check_eq(kt_nav_reachable_collect(&map, &workspace, &hooks,
+                                      kt_cell_point_make(5, 5, 0), 24u,
+                                      collected, 64u, &count),
+             KT_OK, "collect ok");
+    check(count > 1u, "collected more than the start");
+    check(kt_cell_point_equal(collected[0], kt_cell_point_make(5, 5, 0)),
+          "the start settles first");
+
+    /* Settle order is non-decreasing in cost -- that is what makes it a
+     * settle order rather than an arbitrary set. */
+    for (i = 1u; i < count; ++i) {
+        uint32_t prev = kt_nav_cost_to(&map, &workspace, collected[i - 1u]);
+        uint32_t cur = kt_nav_cost_to(&map, &workspace, collected[i]);
+
+        check(prev <= cur, "settle order is non-decreasing in cost");
+    }
+
+    /* The early stop must truncate rather than overrun. */
+    check_eq(kt_nav_reachable_collect(&map, &workspace, &hooks,
+                                      kt_cell_point_make(5, 5, 0), 1000u,
+                                      collected, 5u, &count),
+             KT_OK, "capped collect ok");
+    check_eq((int64_t)count, 5, "early stop truncates at capacity");
+}
+
+static void test_elevation_cutaway(void)
+{
+    kt_map map;
+    kt_projection projection;
+    kt_camera camera;
+    kt_cell_point got;
+    kt_screen_point at;
+    int y, x;
+
+    printf("elevation-aware cutaway\n");
+    kt_map_init(&map, KAT_W, KAT_H, 1, g_kat_cells,
+                sizeof(g_kat_cells) / sizeof(g_kat_cells[0]));
+    for (y = 0; y < KAT_H; ++y) {
+        for (x = 0; x < KAT_W; ++x) {
+            kt_cell *cell = kt_map_cell(&map, kt_cell_point_make(x, y, 0));
+
+            memset(cell, 0, sizeof(*cell));
+            cell->move_cost = 4u;
+            cell->elevation = 0;
+        }
+    }
+    /* One raised cell on an otherwise flat single-level map -- KAT's shape,
+     * where the level index is always 0 and height lives in elevation. */
+    kt_map_cell(&map, kt_cell_point_make(6, 6, 0))->elevation = 3;
+    kt_map_validate(&map);
+    kt_projection_init(&projection, 32, 16, 12, KT_ROTATE_CW);
+    kt_camera_init(&camera);
+    camera.origin_x = 400;
+    camera.origin_y = 100;
+
+    camera.view_level = 5;
+    kt_project(&map, &projection, &camera, kt_cell_point_make(6, 6, 0), &at);
+    check_eq(kt_pick_cell(&map, &projection, &camera, at, &got), KT_OK,
+             "raised cell picks below the cutaway");
+
+    /* Cut away below its elevation: it must vanish even though its LEVEL
+     * index is still 0. That is the whole point. */
+    camera.view_level = 1;
+    check(kt_pick_cell(&map, &projection, &camera, at, &got) != KT_OK ||
+              !kt_cell_point_equal(got, kt_cell_point_make(6, 6, 0)),
+          "raised cell is cut away by elevation, not just level index");
+}
+
 static kt_draw_item g_draw_items[512];
 
 static void test_draw_queue(void)
@@ -1409,6 +1566,9 @@ int main(void)
     test_migration_capabilities();
     test_level_link_from_below();
     test_priority_and_tiebreak();
+    test_depth_order_modes();
+    test_reachable_collect();
+    test_elevation_cutaway();
     test_draw_queue();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

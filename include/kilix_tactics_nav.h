@@ -180,6 +180,22 @@ kt_status kt_nav_reachable(const kt_map *map, kt_nav_workspace *workspace,
                            const kt_nav_hooks *hooks, kt_cell_point start,
                            uint32_t max_cost, size_t *out_reached);
 
+/*
+ * Reachability flood that also records cells in SETTLE order, stopping once
+ * `capacity` cells are recorded.
+ *
+ * The order matters, not just the set: a game's AI consumes the sequence, and
+ * the early stop changes which cells are collected at all. Under
+ * KT_NAV_ORDER_DECREASE_KEY this reproduces a settle order that a game's own
+ * heap would produce.
+ */
+kt_status kt_nav_reachable_collect(const kt_map *map,
+                                   kt_nav_workspace *workspace,
+                                   const kt_nav_hooks *hooks,
+                                   kt_cell_point start, uint32_t max_cost,
+                                   kt_cell_point *out_cells, size_t capacity,
+                                   size_t *out_count);
+
 /* Valid only against the most recent search on this workspace. */
 bool kt_nav_was_reached(const kt_map *map, const kt_nav_workspace *workspace,
                         kt_cell_point point);

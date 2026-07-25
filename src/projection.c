@@ -62,6 +62,7 @@ kt_status kt_projection_init(kt_projection *projection, int32_t tile_width,
     projection->tile_height = tile_height;
     projection->level_step = level_step;
     projection->sense = sense;
+    projection->depth_order = KT_DEPTH_DIAGONAL_MAJOR;
     return KT_OK;
 }
 
@@ -369,6 +370,20 @@ kt_status kt_depth_key(const kt_map *map, const kt_projection *projection,
      * Every field is bounded by KT_MAP_MAX_SPAN / KT_MAP_MAX_LEVELS, so the
      * radix packing cannot carry between fields.
      */
+    if (projection->depth_order == KT_DEPTH_LEVEL_MAJOR) {
+        /*
+         * Level is the most significant term, so every cell of level z paints
+         * before any cell of z+1 regardless of its diagonal row. Each field
+         * stays inside its radix (span <= KT_MAP_MAX_SPAN, so the row sum is
+         * under 2*KT_MAP_MAX_SPAN), and the packing cannot carry between them.
+         */
+        *out_key = (int64_t)world.z * (2 * (int64_t)KT_MAP_MAX_SPAN *
+                                       (int64_t)KT_MAP_MAX_SPAN) +
+                   ((int64_t)view.x + (int64_t)view.y) *
+                       (int64_t)KT_MAP_MAX_SPAN +
+                   (int64_t)view.x;
+        return KT_OK;
+    }
     *out_key = ((int64_t)view.x + (int64_t)view.y) *
                    ((int64_t)KT_MAP_MAX_LEVELS * (int64_t)KT_MAP_MAX_SPAN) +
                (int64_t)world.z * (int64_t)KT_MAP_MAX_SPAN + (int64_t)view.x;
@@ -456,6 +471,15 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
             }
             cell = kt_map_cell_const(map, candidate);
             if (cell == NULL || (int32_t)cell->elevation != offset) {
+                continue;
+            }
+            /*
+             * Cutaway is elevation-aware: a cell raised above the viewing
+             * level is suppressed even when its level index is not. A no-op
+             * for a game that leaves elevation 0 and expresses height purely
+             * as a level index.
+             */
+            if (candidate.z + (int32_t)cell->elevation > camera->view_level) {
                 continue;
             }
             if (kt_project(map, projection, camera, candidate, &origin) !=

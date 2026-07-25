@@ -309,7 +309,8 @@ static kt_nav_node *kt_touch(kt_nav_workspace *workspace, size_t index)
 static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
                            const kt_nav_hooks *hooks, kt_cell_point start,
                            const kt_cell_point *goal, uint32_t max_cost,
-                           size_t *out_goal_index, size_t *out_reached)
+                           size_t *out_goal_index, size_t *out_reached,
+                           kt_cell_point *collect, size_t collect_capacity)
 {
     size_t start_index;
     size_t reached = 0u;
@@ -374,6 +375,17 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
         ++reached;
         if (!kt_map_point_from_index(map, index, &at)) {
             return KT_ERR_STATE;
+        }
+        if (collect != NULL) {
+            /* Recorded at the moment of settling, which is the order a
+             * consuming game's AI depends on. */
+            collect[reached - 1u] = at;
+            if (reached >= collect_capacity) {
+                if (out_reached != NULL) {
+                    *out_reached = reached;
+                }
+                return KT_OK;
+            }
         }
         if (goal != NULL && kt_cell_point_equal(at, *goal)) {
             if (out_goal_index != NULL) {
@@ -470,7 +482,7 @@ kt_status kt_nav_find_path(const kt_map *map, kt_nav_workspace *workspace,
     }
     memset(out_path, 0, sizeof(*out_path));
     status = kt_search(map, workspace, hooks, start, &goal, max_cost,
-                       &goal_index, NULL);
+                       &goal_index, NULL, NULL, 0u);
     if (status != KT_OK) {
         return status;
     }
@@ -506,7 +518,30 @@ kt_status kt_nav_reachable(const kt_map *map, kt_nav_workspace *workspace,
                            uint32_t max_cost, size_t *out_reached)
 {
     return kt_search(map, workspace, hooks, start, NULL, max_cost, NULL,
-                     out_reached);
+                     out_reached, NULL, 0u);
+}
+
+kt_status kt_nav_reachable_collect(const kt_map *map,
+                                   kt_nav_workspace *workspace,
+                                   const kt_nav_hooks *hooks,
+                                   kt_cell_point start, uint32_t max_cost,
+                                   kt_cell_point *out_cells, size_t capacity,
+                                   size_t *out_count)
+{
+    size_t reached = 0u;
+    kt_status status;
+
+    if (out_cells == NULL || capacity == 0u || out_count == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    *out_count = 0u;
+    status = kt_search(map, workspace, hooks, start, NULL, max_cost, NULL,
+                       &reached, out_cells, capacity);
+    if (status != KT_OK) {
+        return status;
+    }
+    *out_count = reached < capacity ? reached : capacity;
+    return KT_OK;
 }
 
 bool kt_nav_was_reached(const kt_map *map, const kt_nav_workspace *workspace,

@@ -29,6 +29,8 @@ PUBLIC_HEADERS := $(wildcard include/*.h)
 
 TEST_SOURCES := tests/test_tactics.c
 TEST_BIN := $(BUILD_DIR)/test-tactics
+PROP_SOURCES := tests/test_properties.c
+PROP_BIN := $(BUILD_DIR)/test-properties
 
 .PHONY: all core soft test sanitize test-clang test-headers clean
 
@@ -56,8 +58,13 @@ $(TEST_BIN): $(TEST_SOURCES) $(CORE_LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(TEST_SOURCES) $(CORE_LIB) -o $@ -lm
 
-test: $(TEST_BIN)
+$(PROP_BIN): $(PROP_SOURCES) $(CORE_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PROP_SOURCES) $(CORE_LIB) -o $@ -lm
+
+test: $(TEST_BIN) $(PROP_BIN)
 	$(TEST_BIN)
+	$(PROP_BIN)
 
 sanitize:
 	$(MAKE) clean

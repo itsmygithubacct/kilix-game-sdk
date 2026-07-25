@@ -125,6 +125,10 @@ game's rendering and pathfinding contracts depend on them:
 `make test` asserts the first against both games' reference formulas across
 their full grids, at every rotation and zoom.
 
+See [docs/integration.md](docs/integration.md) for build wiring, storage and
+heap sizing, the ownership seams, and how to reproduce an existing game's
+behaviour bit-exactly when migrating onto the engine.
+
 ## License
 
 MIT. See `LICENSE`.

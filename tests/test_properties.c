@@ -224,7 +224,18 @@ static void test_astar_optimality(void)
         snprintf(label, sizeof(label), "astar iter %d", iteration);
         g_case = label;
 
-        build_random_map(&map, 12u + next_below(18u), 8u + next_below(12u), 1);
+        /*
+         * Sequenced deliberately. C leaves argument evaluation order
+         * unspecified, so drawing both percentages inside one call expression
+         * made gcc and clang explore different maps -- which quietly destroys
+         * the suite's value as a reproducible golden.
+         */
+        {
+            unsigned walls = 12u + next_below(18u);
+            unsigned blocks = 8u + next_below(12u);
+
+            build_random_map(&map, walls, blocks, 1);
+        }
         ctx.map = &map;
         ctx.allow_diagonal = (iteration % 3) != 0;
         ctx.level_links = false;

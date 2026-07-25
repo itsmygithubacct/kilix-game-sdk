@@ -19,6 +19,7 @@ void kt_nav_hooks_init(kt_nav_hooks *hooks)
     hooks->min_step_cost = 1u;
     hooks->allow_diagonal = true;
     hooks->tiebreak = KT_TIEBREAK_SEQUENCE;
+    hooks->order = KT_NAV_ORDER_SEQUENCE;
 }
 
 kt_status kt_nav_workspace_init(kt_nav_workspace *workspace, kt_nav_node *nodes,
@@ -35,10 +36,33 @@ kt_status kt_nav_workspace_init(kt_nav_workspace *workspace, kt_nav_node *nodes,
     workspace->node_capacity = node_capacity;
     workspace->heap = heap;
     workspace->heap_capacity = heap_capacity;
+    workspace->heap_pos = NULL;
+    workspace->heap_pos_capacity = 0u;
     workspace->heap_count = 0u;
     workspace->generation = 0u;
     workspace->sequence = 0u;
     memset(nodes, 0, node_capacity * sizeof(*nodes));
+    return KT_OK;
+}
+
+kt_status kt_nav_workspace_init_indexed(kt_nav_workspace *workspace,
+                                        kt_nav_node *nodes,
+                                        size_t node_capacity, uint32_t *heap,
+                                        size_t heap_capacity,
+                                        uint32_t *heap_pos,
+                                        size_t heap_pos_capacity)
+{
+    kt_status status = kt_nav_workspace_init(workspace, nodes, node_capacity,
+                                             heap, heap_capacity);
+
+    if (status != KT_OK) {
+        return status;
+    }
+    if (heap_pos == NULL || heap_pos_capacity == 0u) {
+        return KT_ERR_ARGUMENT;
+    }
+    workspace->heap_pos = heap_pos;
+    workspace->heap_pos_capacity = heap_pos_capacity;
     return KT_OK;
 }
 
@@ -92,6 +116,16 @@ static bool kt_node_is_better(const kt_nav_node *a, const kt_nav_node *b,
     return a->sequence < b->sequence;
 }
 
+/* Key only, no tiebreak: the legacy discipline resolves ties by array layout,
+ * which is what reproduces a game's existing route choice. */
+static uint64_t kt_node_key(const kt_nav_node *node, const kt_nav_hooks *hooks)
+{
+    if (hooks->priority != NULL) {
+        return hooks->priority(hooks->user, node->cost, node->estimate);
+    }
+    return (uint64_t)node->cost + (uint64_t)node->estimate;
+}
+
 size_t kt_nav_required_heap(const kt_map *map)
 {
     size_t cells = kt_map_cell_count(map);
@@ -102,12 +136,75 @@ size_t kt_nav_required_heap(const kt_map *map)
     return cells * (size_t)KT_DIR_COUNT + 1u;
 }
 
+static void kt_heap_place(kt_nav_workspace *workspace, size_t slot,
+                          uint32_t cell_index)
+{
+    workspace->heap[slot] = cell_index;
+    if (workspace->heap_pos != NULL &&
+        (size_t)cell_index < workspace->heap_pos_capacity) {
+        workspace->heap_pos[cell_index] = (uint32_t)slot;
+    }
+}
+
 static void kt_heap_swap(kt_nav_workspace *workspace, size_t a, size_t b)
 {
     uint32_t tmp = workspace->heap[a];
 
-    workspace->heap[a] = workspace->heap[b];
-    workspace->heap[b] = tmp;
+    kt_heap_place(workspace, a, workspace->heap[b]);
+    kt_heap_place(workspace, b, tmp);
+}
+
+/*
+ * Faithful transcription of the decrease-key discipline: sift up while the
+ * parent compares strictly greater, sift down preferring the left child and
+ * refusing to promote an equal one.
+ */
+static void kt_heap_up_legacy(kt_nav_workspace *workspace, size_t index,
+                              const kt_nav_hooks *hooks)
+{
+    uint32_t moving = workspace->heap[index];
+    uint64_t key = kt_node_key(&workspace->nodes[moving], hooks);
+
+    while (index > 0u) {
+        size_t parent = (index - 1u) / 2u;
+
+        if (kt_node_key(&workspace->nodes[workspace->heap[parent]], hooks) <=
+            key) {
+            break;
+        }
+        kt_heap_place(workspace, index, workspace->heap[parent]);
+        index = parent;
+    }
+    kt_heap_place(workspace, index, moving);
+}
+
+static void kt_heap_down_legacy(kt_nav_workspace *workspace, size_t index,
+                                const kt_nav_hooks *hooks)
+{
+    uint32_t moving = workspace->heap[index];
+    uint64_t key = kt_node_key(&workspace->nodes[moving], hooks);
+
+    for (;;) {
+        size_t child = index * 2u + 1u;
+
+        if (child >= workspace->heap_count) {
+            break;
+        }
+        if (child + 1u < workspace->heap_count &&
+            kt_node_key(&workspace->nodes[workspace->heap[child + 1u]],
+                        hooks) <
+                kt_node_key(&workspace->nodes[workspace->heap[child]],
+                            hooks)) {
+            ++child;
+        }
+        if (kt_node_key(&workspace->nodes[workspace->heap[child]], hooks) >=
+            key) {
+            break;
+        }
+        kt_heap_place(workspace, index, workspace->heap[child]);
+        index = child;
+    }
+    kt_heap_place(workspace, index, moving);
 }
 
 static void kt_heap_up(kt_nav_workspace *workspace, size_t index,
@@ -160,7 +257,12 @@ static kt_status kt_heap_push(kt_nav_workspace *workspace, size_t cell_index,
     if (workspace->heap_count >= workspace->heap_capacity) {
         return KT_ERR_CAPACITY;
     }
-    workspace->heap[workspace->heap_count] = (uint32_t)cell_index;
+    kt_heap_place(workspace, workspace->heap_count, (uint32_t)cell_index);
+    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
+        ++workspace->heap_count;
+        kt_heap_up_legacy(workspace, workspace->heap_count - 1u, hooks);
+        return KT_OK;
+    }
     kt_heap_up(workspace, workspace->heap_count, hooks);
     ++workspace->heap_count;
     return KT_OK;
@@ -173,8 +275,12 @@ static size_t kt_heap_pop(kt_nav_workspace *workspace,
 
     --workspace->heap_count;
     if (workspace->heap_count > 0u) {
-        workspace->heap[0] = workspace->heap[workspace->heap_count];
-        kt_heap_down(workspace, 0u, hooks);
+        kt_heap_place(workspace, 0u, workspace->heap[workspace->heap_count]);
+        if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
+            kt_heap_down_legacy(workspace, 0u, hooks);
+        } else {
+            kt_heap_down(workspace, 0u, hooks);
+        }
     }
     return top;
 }
@@ -214,8 +320,18 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
         return KT_ERR_ARGUMENT;
     }
     cells = kt_map_cell_count(map);
-    if (cells == 0u || workspace->node_capacity < cells ||
-        workspace->heap_capacity < kt_nav_required_heap(map)) {
+    if (cells == 0u || workspace->node_capacity < cells) {
+        return KT_ERR_CAPACITY;
+    }
+    if (hooks->order == KT_NAV_ORDER_DECREASE_KEY) {
+        /* One entry per node, so the heap needs only one slot per cell -- but
+         * the position index is mandatory. */
+        if (workspace->heap_pos == NULL ||
+            workspace->heap_pos_capacity < cells ||
+            workspace->heap_capacity < cells) {
+            return KT_ERR_CAPACITY;
+        }
+    } else if (workspace->heap_capacity < kt_nav_required_heap(map)) {
         return KT_ERR_CAPACITY;
     }
     if (hooks->min_step_cost == 0u) {
@@ -301,8 +417,22 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
             neighbour->cost = (uint32_t)total;
             neighbour->parent = (int64_t)index;
             neighbour->prev_dir = (uint8_t)dir;
-            neighbour->sequence = workspace->sequence++;
-            neighbour->state = KT_NODE_OPEN;
+            {
+                bool was_open = neighbour->state == KT_NODE_OPEN;
+
+                neighbour->sequence = workspace->sequence++;
+                neighbour->state = KT_NODE_OPEN;
+                if (hooks->order == KT_NAV_ORDER_DECREASE_KEY && was_open) {
+                    /* One entry per node: reposition rather than duplicate.
+                     * The estimate is not recomputed, matching the reference
+                     * implementations -- for a consistent heuristic it is a
+                     * function of the cell and goal alone, so it is unchanged
+                     * anyway. */
+                    kt_heap_up_legacy(workspace,
+                                      workspace->heap_pos[dest_index], hooks);
+                    continue;
+                }
+            }
             if (goal != NULL) {
                 neighbour->estimate =
                     hooks->heuristic != NULL

@@ -69,6 +69,27 @@ typedef enum kt_nav_tiebreak {
     KT_TIEBREAK_CELL_INDEX      /* lower map index wins */
 } kt_nav_tiebreak;
 
+/*
+ * Heap discipline. The two are not interchangeable: they settle equal-priority
+ * nodes in a different order, and because no closed node is ever reopened, the
+ * first predecessor to relax a cell owns its route permanently. Measured on
+ * C-COM: roughly 14 queries in 1000 returned a different equal-length route
+ * under SEQUENCE, which its replay and render proofs would reject.
+ */
+typedef enum kt_nav_order {
+    /* Lazy duplicate pushes, ties broken explicitly. Needs the larger heap
+     * reported by kt_nav_required_heap(). */
+    KT_NAV_ORDER_SEQUENCE = 0,
+    /*
+     * One heap entry per node with decrease-key, ties resolved by array
+     * layout: sift-up stops when the parent compares less-or-equal, and
+     * sift-down prefers the left child and refuses to promote an equal one.
+     * Requires a heap_pos array via kt_nav_workspace_init_indexed(), and needs
+     * only one heap slot per cell.
+     */
+    KT_NAV_ORDER_DECREASE_KEY
+} kt_nav_order;
+
 typedef struct kt_nav_hooks {
     kt_step_cost_fn step_cost;
     kt_heuristic_fn heuristic;   /* may be NULL */
@@ -77,6 +98,7 @@ typedef struct kt_nav_hooks {
     uint32_t min_step_cost;      /* used by the default heuristic; >= 1 */
     bool allow_diagonal;
     kt_nav_tiebreak tiebreak;
+    kt_nav_order order;
 } kt_nav_hooks;
 
 void kt_nav_hooks_init(kt_nav_hooks *hooks);
@@ -109,8 +131,10 @@ typedef struct kt_nav_node {
 typedef struct kt_nav_workspace {
     kt_nav_node *nodes;       /* caller storage, one per map cell */
     size_t node_capacity;
-    uint32_t *heap;           /* caller storage, one per map cell */
+    uint32_t *heap;           /* caller storage */
     size_t heap_capacity;
+    uint32_t *heap_pos;       /* KT_NAV_ORDER_DECREASE_KEY only; may be NULL */
+    size_t heap_pos_capacity;
     size_t heap_count;
     uint32_t generation;
     uint32_t sequence;
@@ -119,6 +143,17 @@ typedef struct kt_nav_workspace {
 kt_status kt_nav_workspace_init(kt_nav_workspace *workspace, kt_nav_node *nodes,
                                 size_t node_capacity, uint32_t *heap,
                                 size_t heap_capacity);
+
+/*
+ * As above, plus the heap-position index that KT_NAV_ORDER_DECREASE_KEY needs.
+ * heap and heap_pos each need one slot per map cell in that mode.
+ */
+kt_status kt_nav_workspace_init_indexed(kt_nav_workspace *workspace,
+                                        kt_nav_node *nodes,
+                                        size_t node_capacity, uint32_t *heap,
+                                        size_t heap_capacity,
+                                        uint32_t *heap_pos,
+                                        size_t heap_pos_capacity);
 
 typedef struct kt_path {
     uint8_t dirs[KT_PATH_MAX_STEPS];  /* walk order, each a kt_direction */

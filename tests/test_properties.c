@@ -64,6 +64,7 @@ static kt_cell g_cells[PCELLS];
 static kt_nav_node g_nodes[PCELLS];
 /* kt_nav_required_heap(): one queue slot per predecessor per cell. */
 static uint32_t g_heap[PCELLS * KT_DIR_COUNT + 1];
+static uint32_t g_heap_pos[PCELLS];
 
 /* Reference Dijkstra state, deliberately a separate simple implementation. */
 static uint64_t g_ref_cost[PCELLS];
@@ -241,14 +242,28 @@ static void test_astar_optimality(void)
         ctx.allow_diagonal = (iteration % 3) != 0;
         ctx.level_links = false;
 
-        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
-                              sizeof(g_heap) / sizeof(g_heap[0]));
+        /*
+         * Alternate heap disciplines. Both must return OPTIMAL routes; they
+         * are allowed to disagree about WHICH equal-cost route, which is
+         * exactly why the selector exists. A regression in the decrease-key
+         * path would otherwise surface only as a game's replay drifting.
+         */
+        if ((iteration % 2) == 0) {
+            kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
+                                  sizeof(g_heap) / sizeof(g_heap[0]));
+        } else {
+            kt_nav_workspace_init_indexed(&workspace, g_nodes, PCELLS, g_heap,
+                                          sizeof(g_heap) / sizeof(g_heap[0]),
+                                          g_heap_pos, PCELLS);
+        }
         kt_nav_hooks_init(&hooks);
         hooks.step_cost = prop_step;
         hooks.user = &ctx;
         /* Cheapest possible step, so the default heuristic stays admissible. */
         hooks.min_step_cost = 2u;
         hooks.allow_diagonal = ctx.allow_diagonal;
+        hooks.order = (iteration % 2) == 0 ? KT_NAV_ORDER_SEQUENCE
+                                           : KT_NAV_ORDER_DECREASE_KEY;
 
         /* Find a walkable start. */
         start = kt_cell_point_make(0, 0, 0);

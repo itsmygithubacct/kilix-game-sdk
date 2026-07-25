@@ -794,6 +794,21 @@ static void test_sight_levels(void)
                          kt_cell_point_make(8, 8, 1), KT_CHANNEL_SIGHT),
           "intact floor seals");
 
+    /*
+     * A purely vertical ray must be sealed by an intact floor. This regressed
+     * once: the dominant-axis choice ignored dz, so a straight-up ray took
+     * zero steps and returned CLEAR.
+     */
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(4, 4, 0),
+                         kt_cell_point_make(4, 4, 1), KT_CHANNEL_SIGHT),
+          "straight-up ray is sealed by an intact floor");
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(4, 4, 0),
+                         kt_cell_point_make(5, 4, 3), KT_CHANNEL_SIGHT),
+          "steep ray with dz > dx is sealed");
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(4, 4, 1),
+                         kt_cell_point_make(4, 4, 0), KT_CHANNEL_SIGHT),
+          "straight-down ray is sealed too");
+
     /* A gravlift is the documented exception. */
     {
         kt_cell *cell;

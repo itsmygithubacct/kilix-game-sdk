@@ -416,6 +416,27 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
         int32_t offset;
 
         for (offset = -band; offset <= band; ++offset) {
+            kt_cell_point base_view;
+            int32_t dvx;
+            int32_t dvy;
+
+            if (kt_unproject_view(projection, camera, screen, level + offset,
+                                  &base_view.x, &base_view.y) != KT_OK) {
+                continue;
+            }
+            base_view.z = level;
+
+            /*
+             * The closed-form inverse inverts the UNROUNDED transform, but the
+             * forward transform rounds when zoom is not 100, so the exact
+             * candidate can land one cell off: at zoom 80 that missed 256 of
+             * 400 projected cell centres. Sweep the immediate view
+             * neighbourhood and let the diamond test below decide, which is
+             * exact at every zoom. At zoom 100 the centre probe always wins,
+             * so this costs nothing where the inverse is already exact.
+             */
+            for (dvy = -1; dvy <= 1; ++dvy)
+            for (dvx = -1; dvx <= 1; ++dvx) {
             kt_cell_point view;
             kt_cell_point candidate;
             kt_screen_point origin;
@@ -426,10 +447,8 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
             int64_t half_w;
             int64_t half_h;
 
-            if (kt_unproject_view(projection, camera, screen, level + offset,
-                                  &view.x, &view.y) != KT_OK) {
-                continue;
-            }
+            view.x = base_view.x + dvx;
+            view.y = base_view.y + dvy;
             view.z = level;
             if (kt_rotate_to_world(map, projection, camera, view, &candidate) !=
                 KT_OK) {
@@ -476,6 +495,7 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
                 found = true;
                 best_key = key;
                 best = candidate;
+            }
             }
         }
     }

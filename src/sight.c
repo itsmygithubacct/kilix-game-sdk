@@ -160,9 +160,18 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
     if (out_blocked != NULL) {
         *out_blocked = false;
     }
+    /*
+     * The vertical axis participates in choosing the dominant axis. Omitting
+     * it made a purely vertical ray take steps == 0 and return early as
+     * CLEAR -- reporting sight straight up through an intact floor -- and
+     * under-sampled any ray whose vertical run exceeded its horizontal one.
+     */
     steps = dx < 0 ? -dx : dx;
     if ((dy < 0 ? -dy : dy) > steps) {
         steps = dy < 0 ? -dy : dy;
+    }
+    if ((dz < 0 ? -dz : dz) > steps) {
+        steps = dz < 0 ? -dz : dz;
     }
     if (steps == 0) {
         if (out_count != NULL) {

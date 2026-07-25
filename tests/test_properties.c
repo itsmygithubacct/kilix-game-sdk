@@ -437,6 +437,17 @@ static void test_pick_inverts_project(void)
         camera.origin_y = (int32_t)next_below(2000u) - 1000;
         camera.rotation = (uint8_t)next_below(4u);
         camera.view_level = levels - 1;
+        /*
+         * Zoom MUST vary here. Holding it at 100 hid a real defect: the
+         * closed-form inverse inverts the unrounded transform, so at zoom 80
+         * it missed 256 of 400 projected cell centres. KAT renders at 80.
+         */
+        {
+            static const uint16_t zooms[] = {100u, 80u, 65u, 50u, 125u, 175u,
+                                             33u, 250u};
+            camera.zoom_percent =
+                zooms[next_below((uint32_t)(sizeof(zooms) / sizeof(zooms[0])))];
+        }
 
         for (probe = 0u; probe < kt_map_cell_count(&map); ++probe) {
             kt_cell_point want;

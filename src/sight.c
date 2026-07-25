@@ -3,12 +3,6 @@
  */
 #include "kilix_tactics_sight.h"
 
-typedef struct kt_edge_test {
-    int8_t dx;
-    int8_t dy;
-    uint8_t side;
-} kt_edge_test;
-
 /* Frozen movement edge table; see the header for the authoritative listing. */
 static const kt_edge_test kt_edge_table[KT_DIR_COUNT][4] = {
     {{0, 0, KT_WALL_NORTH}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}},
@@ -33,6 +27,24 @@ static const kt_edge_test kt_edge_table[KT_DIR_COUNT][4] = {
      {0, -1, KT_WALL_WEST}}};
 
 static const uint8_t kt_edge_count[KT_DIR_COUNT] = {1, 4, 1, 4, 1, 4, 1, 4};
+
+size_t kt_edge_tests(kt_direction dir, kt_edge_test *out, size_t capacity)
+{
+    size_t count;
+    size_t index;
+
+    if (out == NULL || (unsigned)dir >= (unsigned)KT_DIR_COUNT) {
+        return 0u;
+    }
+    count = kt_edge_count[dir];
+    if (capacity < count) {
+        return 0u;
+    }
+    for (index = 0u; index < count; ++index) {
+        out[index] = kt_edge_table[dir][index];
+    }
+    return count;
+}
 
 bool kt_edge_blocked(const kt_map *map, kt_cell_point from, kt_direction dir,
                      kt_channel channel)

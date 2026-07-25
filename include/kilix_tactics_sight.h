@@ -40,6 +40,34 @@ enum {
 bool kt_edge_blocked(const kt_map *map, kt_cell_point from, kt_direction dir,
                      kt_channel channel);
 
+enum {
+    KT_EDGE_TESTS_MAX = 4
+};
+
+/* One boundary the frozen table requires testing, as an offset from the
+ * source cell plus which side of that cell owns the boundary. */
+typedef struct kt_edge_test {
+    int8_t dx;
+    int8_t dy;
+    uint8_t side;    /* kt_wall_side */
+} kt_edge_test;
+
+/*
+ * Enumerate the boundaries the frozen table requires for one step, so a game
+ * can apply its OWN predicate to each without duplicating the table.
+ *
+ * This exists because a game may need two different movement predicates over
+ * the same map state simultaneously, which no single per-channel bit can
+ * express -- C-COM asks both "is this edge blocked" and "is it blocked if
+ * closed doors also count". Exposing the geometry and letting the caller
+ * supply the predicate keeps the frozen table single-sourced here, and is the
+ * same split already used for kt_nav_hooks.step_cost and kt_sight_hooks.veto.
+ *
+ * Returns the number written: 1 for a cardinal direction, 4 for a diagonal,
+ * 0 for an invalid direction or insufficient capacity.
+ */
+size_t kt_edge_tests(kt_direction dir, kt_edge_test *out, size_t capacity);
+
 /*
  * Sight across one step between adjacent cells on the same level (frozen).
  * An orthogonal step tests the single crossed wall. A diagonal step is open

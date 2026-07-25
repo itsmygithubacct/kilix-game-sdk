@@ -852,6 +852,128 @@ static void test_cover(void)
     check_eq(report.strongest, KT_COVER_FULL, "diagonal takes the stronger");
 }
 
+/*
+ * The frozen edge table transcribed independently from C-COM's path.h, so the
+ * engine's copy is checked against the contract rather than against itself.
+ *
+ *   0 N : N(x,y)
+ *   1 NE: N(x,y), W(x+1,y-1), W(x+1,y), N(x+1,y)
+ *   2 E : W(x+1,y)
+ *   3 SE: W(x+1,y), N(x,y+1), N(x+1,y+1), W(x+1,y+1)
+ *   4 S : N(x,y+1)
+ *   5 SW: W(x,y), W(x,y+1), N(x,y+1), N(x-1,y+1)
+ *   6 W : W(x,y)
+ *   7 NW: W(x,y), N(x,y), N(x-1,y), W(x,y-1)
+ */
+static void test_edge_table_contract(void)
+{
+    static const int8_t want[KT_DIR_COUNT][4][3] = {
+        {{0, 0, KT_WALL_NORTH}},
+        {{0, 0, KT_WALL_NORTH},
+         {1, -1, KT_WALL_WEST},
+         {1, 0, KT_WALL_WEST},
+         {1, 0, KT_WALL_NORTH}},
+        {{1, 0, KT_WALL_WEST}},
+        {{1, 0, KT_WALL_WEST},
+         {0, 1, KT_WALL_NORTH},
+         {1, 1, KT_WALL_NORTH},
+         {1, 1, KT_WALL_WEST}},
+        {{0, 1, KT_WALL_NORTH}},
+        {{0, 0, KT_WALL_WEST},
+         {0, 1, KT_WALL_WEST},
+         {0, 1, KT_WALL_NORTH},
+         {-1, 1, KT_WALL_NORTH}},
+        {{0, 0, KT_WALL_WEST}},
+        {{0, 0, KT_WALL_WEST},
+         {0, 0, KT_WALL_NORTH},
+         {-1, 0, KT_WALL_NORTH},
+         {0, -1, KT_WALL_WEST}}};
+    static const size_t want_count[KT_DIR_COUNT] = {1, 4, 1, 4, 1, 4, 1, 4};
+    kt_map map;
+    int dir;
+
+    printf("frozen edge table contract\n");
+    for (dir = 0; dir < KT_DIR_COUNT; ++dir) {
+        kt_edge_test got[KT_EDGE_TESTS_MAX];
+        size_t count = kt_edge_tests((kt_direction)dir, got,
+                                     KT_EDGE_TESTS_MAX);
+        size_t i;
+
+        check_eq((int64_t)count, (int64_t)want_count[dir], "test count");
+        for (i = 0; i < count; ++i) {
+            check_eq(got[i].dx, want[dir][i][0], "table dx");
+            check_eq(got[i].dy, want[dir][i][1], "table dy");
+            check_eq(got[i].side, want[dir][i][2], "table side");
+        }
+    }
+
+    /* Insufficient capacity is refused, not truncated. */
+    {
+        kt_edge_test one[1];
+
+        check_eq((int64_t)kt_edge_tests(KT_DIR_NE, one, 1u), 0,
+                 "diagonal refuses a 1-slot buffer");
+        check_eq((int64_t)kt_edge_tests(KT_DIR_N, one, 1u), 1,
+                 "cardinal fits a 1-slot buffer");
+    }
+
+    /*
+     * A caller applying its own predicate over the enumerated boundaries must
+     * reproduce kt_edge_blocked exactly. This is what lets C-COM express its
+     * door-inclusive movement variant without duplicating the table.
+     */
+    kt_map_init(&map, NAV_W, NAV_H, 1, g_nav_cells,
+                sizeof(g_nav_cells) / sizeof(g_nav_cells[0]));
+    for (size_t i = 0; i < kt_map_cell_count(&map); ++i) {
+        /* Deterministic pseudo-random wall scatter. */
+        g_nav_cells[i].move_cost = 4u;
+        g_nav_cells[i].wall[KT_WALL_WEST] =
+            ((i * 2654435761u) >> 13) % 3u == 0u ? KT_WALL_BLOCKS_MOVE : 0u;
+        g_nav_cells[i].wall[KT_WALL_NORTH] =
+            ((i * 40503u) >> 7) % 4u == 0u ? KT_WALL_BLOCKS_MOVE : 0u;
+        g_nav_cells[i].occupy = 0u;
+        g_nav_cells[i].flags = 0u;
+        g_nav_cells[i].cover_half = 0u;
+        g_nav_cells[i].cover_full = 0u;
+    }
+    kt_map_validate(&map);
+
+    for (int y = 0; y < NAV_H; ++y) {
+        for (int x = 0; x < NAV_W; ++x) {
+            for (dir = 0; dir < KT_DIR_COUNT; ++dir) {
+                kt_cell_point from = kt_cell_point_make(x, y, 0);
+                kt_cell_point neighbour = kt_cell_point_make(
+                    x + kt_direction_dx[dir], y + kt_direction_dy[dir], 0);
+                kt_edge_test tests[KT_EDGE_TESTS_MAX];
+                size_t count;
+                size_t i;
+                bool manual;
+
+                /* kt_edge_blocked also rejects an off-map neighbour, which
+                 * the caller must reproduce itself. */
+                manual = !kt_map_contains(&map, from) ||
+                         !kt_map_contains(&map, neighbour);
+                count = kt_edge_tests((kt_direction)dir, tests,
+                                      KT_EDGE_TESTS_MAX);
+                for (i = 0; i < count && !manual; ++i) {
+                    kt_cell_point at = kt_cell_point_make(
+                        x + tests[i].dx, y + tests[i].dy, 0);
+
+                    if (kt_map_wall_blocks(&map, at,
+                                           (kt_wall_side)tests[i].side,
+                                           KT_CHANNEL_MOVE)) {
+                        manual = true;
+                    }
+                }
+                check_eq(manual,
+                         kt_edge_blocked(&map, from, (kt_direction)dir,
+                                         KT_CHANNEL_MOVE),
+                         "enumerated predicate matches kt_edge_blocked");
+            }
+        }
+    }
+}
+
 static kt_draw_item g_draw_items[512];
 
 static void test_draw_queue(void)
@@ -953,6 +1075,7 @@ int main(void)
     test_sight();
     test_sight_levels();
     test_cover();
+    test_edge_table_contract();
     test_draw_queue();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

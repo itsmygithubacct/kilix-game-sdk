@@ -62,7 +62,8 @@ enum { PCELLS = PW * PH * PD };
 
 static kt_cell g_cells[PCELLS];
 static kt_nav_node g_nodes[PCELLS];
-static uint32_t g_heap[PCELLS];
+/* kt_nav_required_heap(): one queue slot per predecessor per cell. */
+static uint32_t g_heap[PCELLS * KT_DIR_COUNT + 1];
 
 /* Reference Dijkstra state, deliberately a separate simple implementation. */
 static uint64_t g_ref_cost[PCELLS];
@@ -240,7 +241,8 @@ static void test_astar_optimality(void)
         ctx.allow_diagonal = (iteration % 3) != 0;
         ctx.level_links = false;
 
-        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap, PCELLS);
+        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
+                              sizeof(g_heap) / sizeof(g_heap[0]));
         kt_nav_hooks_init(&hooks);
         hooks.step_cost = prop_step;
         hooks.user = &ctx;
@@ -353,7 +355,8 @@ static void test_reachable_agrees(void)
         ctx.map = &map;
         ctx.allow_diagonal = true;
         ctx.level_links = false;
-        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap, PCELLS);
+        kt_nav_workspace_init(&workspace, g_nodes, PCELLS, g_heap,
+                              sizeof(g_heap) / sizeof(g_heap[0]));
         kt_nav_hooks_init(&hooks);
         hooks.step_cost = prop_step;
         hooks.user = &ctx;

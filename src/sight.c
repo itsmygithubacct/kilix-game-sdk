@@ -60,6 +60,24 @@ bool kt_edge_blocked(const kt_map *map, kt_cell_point from, kt_direction dir,
     if (!kt_map_contains(map, from) || !kt_map_contains(map, neighbour)) {
         return true;
     }
+    /*
+     * A game may mark a single diagonal edge blocked, which two orthogonal
+     * wall sides cannot encode. Consulted only on the MOVE channel, and only
+     * for diagonals, so the frozen table is otherwise untouched.
+     */
+    if (channel == KT_CHANNEL_MOVE && KT_DIR_IS_DIAGONAL(dir)) {
+        const kt_cell *source = kt_map_cell_const(map, from);
+        const kt_cell *target = kt_map_cell_const(map, neighbour);
+        uint8_t bit = (uint8_t)(1u << (unsigned)dir);
+        uint8_t back = (uint8_t)(1u << (unsigned)kt_direction_opposite(dir));
+
+        if (source != NULL && (source->diag_block & bit) != 0u) {
+            return true;
+        }
+        if (target != NULL && (target->diag_block & back) != 0u) {
+            return true;
+        }
+    }
     for (index = 0u; index < kt_edge_count[dir]; ++index) {
         const kt_edge_test *test = &kt_edge_table[dir][index];
         kt_cell_point at = kt_cell_point_make(from.x + test->dx,
@@ -226,7 +244,24 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
                 }
                 break;
             }
+            /*
+             * Consult BOTH sides of the boundary. A vertical link is a fact
+             * about the cell that contains it, and C-COM's gravlift in the
+             * LOWER cell pierces the deck above it just as one in the upper
+             * cell does. Reading only the sealed side made the lower-cell
+             * case inexpressible.
+             */
             cell = kt_map_cell_const(map, sealed);
+            {
+                kt_cell_point under =
+                    kt_cell_point_make(at.x, at.y, sealed_z - 1);
+                const kt_cell *below = kt_map_cell_const(map, under);
+
+                if (below != NULL &&
+                    (below->flags & KT_CELL_LEVEL_LINK) != 0u) {
+                    cell = NULL; /* linked from beneath: the deck is open */
+                }
+            }
             if (!geometry_only && cell != NULL &&
                 (cell->flags & KT_CELL_HAS_FLOOR) != 0u &&
                 (cell->flags & KT_CELL_LEVEL_LINK) == 0u) {

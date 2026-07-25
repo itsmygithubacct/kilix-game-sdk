@@ -105,6 +105,8 @@ static uint8_t kt_channel_wall_bit(kt_channel channel)
         return (uint8_t)KT_WALL_BLOCKS_SIGHT;
     case KT_CHANNEL_FIRE:
         return (uint8_t)KT_WALL_BLOCKS_FIRE;
+    case KT_CHANNEL_SPREAD:
+        return (uint8_t)KT_WALL_BLOCKS_SPREAD;
     default:
         return 0u;
     }
@@ -119,6 +121,8 @@ static uint8_t kt_channel_occupy_bit(kt_channel channel)
         return (uint8_t)KT_OCCUPY_BLOCKS_SIGHT;
     case KT_CHANNEL_FIRE:
         return (uint8_t)KT_OCCUPY_BLOCKS_FIRE;
+    case KT_CHANNEL_SPREAD:
+        return (uint8_t)KT_OCCUPY_BLOCKS_SPREAD;
     default:
         return 0u;
     }
@@ -184,13 +188,14 @@ kt_status kt_map_validate(kt_map *map)
         if (magnitude > span) {
             span = magnitude;
         }
-        /* A level link that is not enterable cannot connect anything, and
-         * silently ignoring it would make vertical sight and movement
-         * disagree between the two games. */
-        if ((cell->flags & KT_CELL_LEVEL_LINK) != 0u &&
-            cell->move_cost == KT_MOVE_BLOCKED) {
-            return KT_ERR_STATE;
-        }
+        /*
+         * KT_CELL_LEVEL_LINK is deliberately NOT coupled to move_cost. It
+         * governs the vertical boundary only; whether a unit can walk into
+         * the cell horizontally is a separate fact. C-COM has gravlift
+         * shafts that pass sight vertically while being horizontally
+         * unenterable, and rejecting those would have made the whole map
+         * invalid.
+         */
         /* Full cover subsumes half cover; overlapping bits would make the
          * reported grade depend on test order. */
         if ((cell->cover_half & cell->cover_full) != 0u) {

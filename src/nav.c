@@ -14,9 +14,11 @@ void kt_nav_hooks_init(kt_nav_hooks *hooks)
     }
     hooks->step_cost = NULL;
     hooks->heuristic = NULL;
+    hooks->priority = NULL;
     hooks->user = NULL;
     hooks->min_step_cost = 1u;
     hooks->allow_diagonal = true;
+    hooks->tiebreak = KT_TIEBREAK_SEQUENCE;
 }
 
 kt_status kt_nav_workspace_init(kt_nav_workspace *workspace, kt_nav_node *nodes,
@@ -63,20 +65,41 @@ static uint32_t kt_default_heuristic(kt_cell_point at, kt_cell_point goal,
     return (adx < ady ? ady : adx) * min_step_cost;
 }
 
-static bool kt_node_is_better(const kt_nav_node *a, const kt_nav_node *b)
+static bool kt_node_is_better(const kt_nav_node *a, const kt_nav_node *b,
+                              const kt_nav_hooks *hooks)
 {
-    uint64_t priority_a = (uint64_t)a->cost + (uint64_t)a->estimate;
-    uint64_t priority_b = (uint64_t)b->cost + (uint64_t)b->estimate;
+    uint64_t priority_a;
+    uint64_t priority_b;
 
+    if (hooks->priority != NULL) {
+        priority_a = hooks->priority(hooks->user, a->cost, a->estimate);
+        priority_b = hooks->priority(hooks->user, b->cost, b->estimate);
+    } else {
+        priority_a = (uint64_t)a->cost + (uint64_t)a->estimate;
+        priority_b = (uint64_t)b->cost + (uint64_t)b->estimate;
+    }
     if (priority_a != priority_b) {
         return priority_a < priority_b;
     }
     if (a->cost != b->cost) {
         return a->cost < b->cost;
     }
+    if (hooks->tiebreak == KT_TIEBREAK_CELL_INDEX) {
+        return a->cell_index < b->cell_index;
+    }
     /* Insertion order is the final tiebreak, so the search is total and
      * reproducible rather than dependent on heap layout. */
     return a->sequence < b->sequence;
+}
+
+size_t kt_nav_required_heap(const kt_map *map)
+{
+    size_t cells = kt_map_cell_count(map);
+
+    if (cells == 0u) {
+        return 0u;
+    }
+    return cells * (size_t)KT_DIR_COUNT + 1u;
 }
 
 static void kt_heap_swap(kt_nav_workspace *workspace, size_t a, size_t b)
@@ -87,13 +110,15 @@ static void kt_heap_swap(kt_nav_workspace *workspace, size_t a, size_t b)
     workspace->heap[b] = tmp;
 }
 
-static void kt_heap_up(kt_nav_workspace *workspace, size_t index)
+static void kt_heap_up(kt_nav_workspace *workspace, size_t index,
+                       const kt_nav_hooks *hooks)
 {
     while (index > 0u) {
         size_t parent = (index - 1u) / 2u;
 
         if (!kt_node_is_better(&workspace->nodes[workspace->heap[index]],
-                               &workspace->nodes[workspace->heap[parent]])) {
+                               &workspace->nodes[workspace->heap[parent]],
+                               hooks)) {
             break;
         }
         kt_heap_swap(workspace, index, parent);
@@ -101,7 +126,8 @@ static void kt_heap_up(kt_nav_workspace *workspace, size_t index)
     }
 }
 
-static void kt_heap_down(kt_nav_workspace *workspace, size_t index)
+static void kt_heap_down(kt_nav_workspace *workspace, size_t index,
+                         const kt_nav_hooks *hooks)
 {
     for (;;) {
         size_t left = index * 2u + 1u;
@@ -110,12 +136,14 @@ static void kt_heap_down(kt_nav_workspace *workspace, size_t index)
 
         if (left < workspace->heap_count &&
             kt_node_is_better(&workspace->nodes[workspace->heap[left]],
-                              &workspace->nodes[workspace->heap[best]])) {
+                              &workspace->nodes[workspace->heap[best]],
+                              hooks)) {
             best = left;
         }
         if (right < workspace->heap_count &&
             kt_node_is_better(&workspace->nodes[workspace->heap[right]],
-                              &workspace->nodes[workspace->heap[best]])) {
+                              &workspace->nodes[workspace->heap[best]],
+                              hooks)) {
             best = right;
         }
         if (best == index) {
@@ -126,25 +154,27 @@ static void kt_heap_down(kt_nav_workspace *workspace, size_t index)
     }
 }
 
-static kt_status kt_heap_push(kt_nav_workspace *workspace, size_t cell_index)
+static kt_status kt_heap_push(kt_nav_workspace *workspace, size_t cell_index,
+                              const kt_nav_hooks *hooks)
 {
     if (workspace->heap_count >= workspace->heap_capacity) {
         return KT_ERR_CAPACITY;
     }
     workspace->heap[workspace->heap_count] = (uint32_t)cell_index;
-    kt_heap_up(workspace, workspace->heap_count);
+    kt_heap_up(workspace, workspace->heap_count, hooks);
     ++workspace->heap_count;
     return KT_OK;
 }
 
-static size_t kt_heap_pop(kt_nav_workspace *workspace)
+static size_t kt_heap_pop(kt_nav_workspace *workspace,
+                          const kt_nav_hooks *hooks)
 {
     size_t top = workspace->heap[0];
 
     --workspace->heap_count;
     if (workspace->heap_count > 0u) {
         workspace->heap[0] = workspace->heap[workspace->heap_count];
-        kt_heap_down(workspace, 0u);
+        kt_heap_down(workspace, 0u, hooks);
     }
     return top;
 }
@@ -155,6 +185,7 @@ static kt_nav_node *kt_touch(kt_nav_workspace *workspace, size_t index)
 
     if (node->generation != workspace->generation) {
         node->generation = workspace->generation;
+        node->cell_index = (uint32_t)index;
         node->cost = UINT32_MAX;
         node->estimate = 0u;
         node->sequence = 0u;
@@ -184,7 +215,7 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
     }
     cells = kt_map_cell_count(map);
     if (cells == 0u || workspace->node_capacity < cells ||
-        workspace->heap_capacity < cells) {
+        workspace->heap_capacity < kt_nav_required_heap(map)) {
         return KT_ERR_CAPACITY;
     }
     if (hooks->min_step_cost == 0u) {
@@ -209,13 +240,13 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
         node->estimate = 0u;
         node->sequence = workspace->sequence++;
         node->state = KT_NODE_OPEN;
-        if (kt_heap_push(workspace, start_index) != KT_OK) {
+        if (kt_heap_push(workspace, start_index, hooks) != KT_OK) {
             return KT_ERR_CAPACITY;
         }
     }
 
     while (workspace->heap_count > 0u) {
-        size_t index = kt_heap_pop(workspace);
+        size_t index = kt_heap_pop(workspace, hooks);
         kt_nav_node *node = kt_touch(workspace, index);
         kt_cell_point at;
         int dir;
@@ -281,7 +312,7 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
             } else {
                 neighbour->estimate = 0u;
             }
-            if (kt_heap_push(workspace, dest_index) != KT_OK) {
+            if (kt_heap_push(workspace, dest_index, hooks) != KT_OK) {
                 return KT_ERR_CAPACITY;
             }
         }

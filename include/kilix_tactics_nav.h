@@ -43,12 +43,40 @@ typedef uint32_t (*kt_step_cost_fn)(void *user, kt_cell_point from,
 typedef uint32_t (*kt_heuristic_fn)(void *user, kt_cell_point at,
                                     kt_cell_point goal);
 
+/*
+ * Optional priority combiner. NULL keeps the default
+ * (uint64)cost + (uint64)estimate.
+ *
+ * This exists because a game's A* key need not be an integer sum. C-COM's is
+ * IEEE-754 float32 -- both its heuristic and the addition round to float32 --
+ * which manufactures orderings no integer key reproduces. Such a game returns
+ * its float's raw bit pattern from the heuristic and reassembles it here; for
+ * non-negative float32 the uint32 bit pattern orders identically to the float,
+ * so the comparison is bit-exact.
+ *
+ * max_cost pruning always uses the integer cost, never this value.
+ */
+typedef uint64_t (*kt_nav_priority_fn)(void *user, uint32_t cost,
+                                       uint32_t estimate);
+
+/*
+ * How equal-priority nodes are ordered. Ties are pervasive on uniform-cost
+ * terrain, and because neither implementation reopens a closed node, tie order
+ * directly selects among equal-cost routes -- which both games persist.
+ */
+typedef enum kt_nav_tiebreak {
+    KT_TIEBREAK_SEQUENCE = 0,   /* insertion order; the default */
+    KT_TIEBREAK_CELL_INDEX      /* lower map index wins */
+} kt_nav_tiebreak;
+
 typedef struct kt_nav_hooks {
     kt_step_cost_fn step_cost;
     kt_heuristic_fn heuristic;   /* may be NULL */
+    kt_nav_priority_fn priority; /* may be NULL */
     void *user;
     uint32_t min_step_cost;      /* used by the default heuristic; >= 1 */
     bool allow_diagonal;
+    kt_nav_tiebreak tiebreak;
 } kt_nav_hooks;
 
 void kt_nav_hooks_init(kt_nav_hooks *hooks);
@@ -57,8 +85,18 @@ void kt_nav_hooks_init(kt_nav_hooks *hooks);
  * Per-cell search bookkeeping. The generation counter avoids clearing the
  * whole grid per query, which matters at C-COM's 6400 cells.
  */
+/*
+ * Minimum heap storage for a map. The search pushes a fresh entry on every
+ * improving relaxation rather than repositioning the existing one, so a node
+ * with up to KT_DIR_COUNT predecessors can be queued that many times. Sizing
+ * a heap to the cell count can therefore overflow and surface as a spurious
+ * "no route".
+ */
+size_t kt_nav_required_heap(const kt_map *map);
+
 typedef struct kt_nav_node {
     uint32_t generation;
+    uint32_t cell_index;
     uint32_t cost;
     uint32_t estimate;
     uint32_t sequence;

@@ -57,6 +57,15 @@ typedef enum kt_channel {
     KT_CHANNEL_MOVE = 0,
     KT_CHANNEL_SIGHT,
     KT_CHANNEL_FIRE,
+    /*
+     * A fourth, game-defined channel over the same frozen edge geometry.
+     * It exists because a boundary's propagation behaviour is genuinely
+     * independent of its movement, sight and fire behaviour: C-COM spreads
+     * fire and smoke through a closed wooden door that costs only 4 TU to
+     * walk through and does not block sight. The engine never assigns it
+     * meaning; it only routes it.
+     */
+    KT_CHANNEL_SPREAD,
     KT_CHANNEL_COUNT
 } kt_channel;
 

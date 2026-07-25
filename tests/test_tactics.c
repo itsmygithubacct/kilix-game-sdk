@@ -205,12 +205,18 @@ static void test_map(void)
     check_eq(kt_map_validate(&map), KT_OK, "validate");
     check_eq(map.elevation_span, 0, "flat span");
 
-    /* A level link on an unenterable cell is rejected, not ignored. */
+    /*
+     * A level link on a horizontally unenterable cell is VALID: the flag
+     * governs the vertical boundary only. C-COM has gravlift shafts that pass
+     * sight vertically while no unit can walk into them, and coupling the two
+     * would have made every such map invalid.
+     */
     if (cell != NULL) {
         cell->flags = KT_CELL_LEVEL_LINK;
         cell->move_cost = KT_MOVE_BLOCKED;
     }
-    check_eq(kt_map_validate(&map), KT_ERR_STATE, "bad level link rejected");
+    check_eq(kt_map_validate(&map), KT_OK,
+             "level link on an unenterable cell is valid");
     if (cell != NULL) {
         cell->flags = 0u;
         cell->move_cost = 4u;
@@ -569,7 +575,9 @@ static void test_subcell(void)
 enum { NAV_W = 12, NAV_H = 12 };
 static kt_cell g_nav_cells[NAV_W * NAV_H];
 static kt_nav_node g_nav_nodes[NAV_W * NAV_H];
-static uint32_t g_nav_heap[NAV_W * NAV_H];
+/* Sized by kt_nav_required_heap(): the search pushes a fresh entry per
+ * improving relaxation, so a node can be queued once per predecessor. */
+static uint32_t g_nav_heap[NAV_W * NAV_H * KT_DIR_COUNT + 1];
 
 /*
  * A deliberately plain step-cost hook: the engine must not need to know
@@ -1072,6 +1080,229 @@ static void test_ray_geometry(void)
     }
 }
 
+
+/*
+ * Capabilities added so the two games' existing behaviour can be reproduced
+ * exactly. Each corresponds to a case where the engine's original shape
+ * provably could not express what a game already does.
+ */
+static void test_migration_capabilities(void)
+{
+    kt_map map;
+    kt_cell *cell;
+
+    printf("migration capabilities\n");
+    kt_map_init(&map, NAV_W, NAV_H, 1, g_nav_cells,
+                sizeof(g_nav_cells) / sizeof(g_nav_cells[0]));
+    for (size_t i = 0; i < kt_map_cell_count(&map); ++i) {
+        memset(&g_nav_cells[i], 0, sizeof(g_nav_cells[i]));
+        g_nav_cells[i].move_cost = 4u;
+    }
+    kt_map_validate(&map);
+
+    /*
+     * A boundary that blocks propagation while remaining cheap to walk
+     * through and transparent -- C-COM's closed wooden door. Four independent
+     * channels over one boundary.
+     */
+    cell = kt_map_cell(&map, kt_cell_point_make(5, 5, 0));
+    cell->wall[KT_WALL_WEST] = KT_WALL_BLOCKS_SPREAD;
+    check(!kt_map_wall_blocks(&map, kt_cell_point_make(5, 5, 0), KT_WALL_WEST,
+                              KT_CHANNEL_MOVE),
+          "door is walkable");
+    check(!kt_map_wall_blocks(&map, kt_cell_point_make(5, 5, 0), KT_WALL_WEST,
+                              KT_CHANNEL_SIGHT),
+          "door is transparent");
+    check(kt_map_wall_blocks(&map, kt_cell_point_make(5, 5, 0), KT_WALL_WEST,
+                             KT_CHANNEL_SPREAD),
+          "door blocks fire and smoke spread");
+    cell->wall[KT_WALL_WEST] = 0u;
+
+    /*
+     * A single blocked diagonal, which two orthogonal wall sides cannot
+     * encode. Neighbouring cardinals must stay open, which is exactly what
+     * makes it inexpressible as walls.
+     */
+    cell = kt_map_cell(&map, kt_cell_point_make(4, 4, 0));
+    cell->diag_block = (uint8_t)(1u << KT_DIR_SE);
+    check(kt_edge_blocked(&map, kt_cell_point_make(4, 4, 0), KT_DIR_SE,
+                          KT_CHANNEL_MOVE),
+          "diagonal mask blocks its direction");
+    check(!kt_edge_blocked(&map, kt_cell_point_make(4, 4, 0), KT_DIR_E,
+                           KT_CHANNEL_MOVE),
+          "east stays open");
+    check(!kt_edge_blocked(&map, kt_cell_point_make(4, 4, 0), KT_DIR_S,
+                           KT_CHANNEL_MOVE),
+          "south stays open");
+    check(kt_edge_blocked(&map, kt_cell_point_make(5, 5, 0), KT_DIR_NW,
+                          KT_CHANNEL_MOVE),
+          "the reverse direction is blocked too");
+    check(!kt_edge_blocked(&map, kt_cell_point_make(4, 4, 0), KT_DIR_SE,
+                           KT_CHANNEL_SIGHT),
+          "the mask is movement-only");
+    cell->diag_block = 0u;
+
+    /* Per-boundary traversal cost travels with the cell for the step hook. */
+    cell->wall_cost[KT_WALL_NORTH] = 4u;
+    check_eq(kt_map_cell_const(&map, kt_cell_point_make(4, 4, 0))
+                 ->wall_cost[KT_WALL_NORTH],
+             4, "wall cost is carried, not interpreted");
+    cell->wall_cost[KT_WALL_NORTH] = 0u;
+}
+
+static void test_level_link_from_below(void)
+{
+    kt_map map;
+    size_t i;
+
+    printf("vertical links on either side of a deck\n");
+    kt_map_init(&map, CCOM_W, CCOM_H, CCOM_D, g_ccom_cells,
+                sizeof(g_ccom_cells) / sizeof(g_ccom_cells[0]));
+    for (i = 0; i < kt_map_cell_count(&map); ++i) {
+        memset(&g_ccom_cells[i], 0, sizeof(g_ccom_cells[i]));
+        g_ccom_cells[i].move_cost = 4u;
+        g_ccom_cells[i].flags = KT_CELL_HAS_FLOOR;
+    }
+    kt_map_validate(&map);
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(3, 3, 0),
+                         kt_cell_point_make(3, 3, 1), KT_CHANNEL_SIGHT),
+          "intact deck seals");
+
+    /* A shaft recorded on the LOWER cell must pierce the deck above it. */
+    kt_map_cell(&map, kt_cell_point_make(3, 3, 0))->flags =
+        (uint8_t)(KT_CELL_HAS_FLOOR | KT_CELL_LEVEL_LINK);
+    kt_map_validate(&map);
+    check(kt_sight_line(&map, NULL, kt_cell_point_make(3, 3, 0),
+                        kt_cell_point_make(3, 3, 1), KT_CHANNEL_SIGHT),
+          "link on the lower cell opens the deck");
+
+    /* And recorded on the upper cell, as before. */
+    kt_map_cell(&map, kt_cell_point_make(3, 3, 0))->flags = KT_CELL_HAS_FLOOR;
+    kt_map_cell(&map, kt_cell_point_make(3, 3, 1))->flags =
+        (uint8_t)(KT_CELL_HAS_FLOOR | KT_CELL_LEVEL_LINK);
+    kt_map_validate(&map);
+    check(kt_sight_line(&map, NULL, kt_cell_point_make(3, 3, 0),
+                        kt_cell_point_make(3, 3, 1), KT_CHANNEL_SIGHT),
+          "link on the upper cell opens the deck");
+}
+
+/* A float32 priority key, which is C-COM's, reassembled through the hook. */
+static uint32_t float_bits(float f)
+{
+    uint32_t bits;
+
+    memcpy(&bits, &f, sizeof(bits));
+    return bits;
+}
+
+static float bits_float(uint32_t bits)
+{
+    float f;
+
+    memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+static uint32_t cap_heuristic(void *user, kt_cell_point at, kt_cell_point goal)
+{
+    int dx = goal.x - at.x;
+    int dy = goal.y - at.y;
+
+    (void)user;
+    /* Deliberately float, and returned as an opaque bit pattern. */
+    return float_bits(4.0f * (float)((dx < 0 ? -dx : dx) +
+                                     (dy < 0 ? -dy : dy)));
+}
+
+static uint64_t cap_priority(void *user, uint32_t cost, uint32_t estimate)
+{
+    float f;
+
+    (void)user;
+    f = (float)cost + bits_float(estimate);
+    return (uint64_t)float_bits(f);
+}
+
+static void test_priority_and_tiebreak(void)
+{
+    kt_map map;
+    kt_nav_workspace workspace;
+    kt_nav_hooks hooks;
+    kt_path a;
+    kt_path b;
+
+    printf("priority combiner and tiebreak selector\n");
+    kt_map_init(&map, NAV_W, NAV_H, 1, g_nav_cells,
+                sizeof(g_nav_cells) / sizeof(g_nav_cells[0]));
+    for (size_t i = 0; i < kt_map_cell_count(&map); ++i) {
+        memset(&g_nav_cells[i], 0, sizeof(g_nav_cells[i]));
+        g_nav_cells[i].move_cost = 4u;
+    }
+    kt_map_validate(&map);
+
+    kt_nav_workspace_init(&workspace, g_nav_nodes,
+                          sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
+                          g_nav_heap,
+                          sizeof(g_nav_heap) / sizeof(g_nav_heap[0]));
+    kt_nav_hooks_init(&hooks);
+    hooks.step_cost = nav_step;
+    hooks.user = &map;
+    hooks.min_step_cost = 4u;
+
+    /* A float32 key must produce a valid optimal route, not just run. */
+    hooks.heuristic = cap_heuristic;
+    hooks.priority = cap_priority;
+    check_eq(kt_nav_find_path(&map, &workspace, &hooks,
+                              kt_cell_point_make(1, 1, 0),
+                              kt_cell_point_make(9, 7, 0), 1000u, &a),
+             KT_OK, "float priority search succeeds");
+
+    hooks.heuristic = NULL;
+    hooks.priority = NULL;
+    check_eq(kt_nav_find_path(&map, &workspace, &hooks,
+                              kt_cell_point_make(1, 1, 0),
+                              kt_cell_point_make(9, 7, 0), 1000u, &b),
+             KT_OK, "integer search succeeds");
+    /* Both must be optimal; the ROUTE may legitimately differ, which is
+     * precisely why the selector exists. */
+    check_eq(a.total_cost, b.total_cost,
+             "both key styles find an equal-cost route");
+
+    /* The tiebreak selector must be honoured and deterministic. */
+    hooks.tiebreak = KT_TIEBREAK_CELL_INDEX;
+    check_eq(kt_nav_find_path(&map, &workspace, &hooks,
+                              kt_cell_point_make(1, 1, 0),
+                              kt_cell_point_make(9, 7, 0), 1000u, &a),
+             KT_OK, "cell-index tiebreak search succeeds");
+    check_eq(a.total_cost, b.total_cost, "cell-index route is still optimal");
+    {
+        kt_path again;
+
+        kt_nav_find_path(&map, &workspace, &hooks, kt_cell_point_make(1, 1, 0),
+                         kt_cell_point_make(9, 7, 0), 1000u, &again);
+        check(memcmp(again.dirs, a.dirs, a.count) == 0 &&
+                  again.count == a.count,
+              "cell-index tiebreak is deterministic");
+    }
+
+    /* The heap requirement is reported, and an undersized heap is refused. */
+    check_eq((int64_t)kt_nav_required_heap(&map),
+             (int64_t)(kt_map_cell_count(&map) * KT_DIR_COUNT + 1u),
+             "required heap reported");
+    {
+        kt_nav_workspace small;
+
+        kt_nav_workspace_init(&small, g_nav_nodes,
+                              sizeof(g_nav_nodes) / sizeof(g_nav_nodes[0]),
+                              g_nav_heap, kt_map_cell_count(&map));
+        check_eq(kt_nav_find_path(&map, &small, &hooks,
+                                  kt_cell_point_make(1, 1, 0),
+                                  kt_cell_point_make(9, 7, 0), 1000u, &a),
+                 KT_ERR_CAPACITY,
+                 "cell-count heap refused up front, not mid-search");
+    }
+}
+
 static kt_draw_item g_draw_items[512];
 
 static void test_draw_queue(void)
@@ -1175,6 +1406,9 @@ int main(void)
     test_cover();
     test_edge_table_contract();
     test_ray_geometry();
+    test_migration_capabilities();
+    test_level_link_from_below();
+    test_priority_and_tiebreak();
     test_draw_queue();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

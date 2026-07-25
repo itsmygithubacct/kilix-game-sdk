@@ -30,21 +30,29 @@ enum {
 enum {
     KT_WALL_BLOCKS_MOVE = 1u << 0,
     KT_WALL_BLOCKS_SIGHT = 1u << 1,
-    KT_WALL_BLOCKS_FIRE = 1u << 2
+    KT_WALL_BLOCKS_FIRE = 1u << 2,
+    KT_WALL_BLOCKS_SPREAD = 1u << 3
 };
 
 /* Bits in kt_cell.occupy — facts about the cell's own contents. */
 enum {
     KT_OCCUPY_BLOCKS_MOVE = 1u << 0,
     KT_OCCUPY_BLOCKS_SIGHT = 1u << 1,
-    KT_OCCUPY_BLOCKS_FIRE = 1u << 2
+    KT_OCCUPY_BLOCKS_FIRE = 1u << 2,
+    KT_OCCUPY_BLOCKS_SPREAD = 1u << 3
 };
 
 /* Bits in kt_cell.flags. */
 enum {
     KT_CELL_HAS_FLOOR = 1u << 0,    /* an intact floor seals this level    */
-    KT_CELL_LEVEL_LINK = 1u << 1    /* gravlift/ladder: sight and movement
-                                       may pass vertically here            */
+    /*
+     * This cell contains a vertical link (gravlift, ladder), so the boundary
+     * above it does not seal. It is a statement about the VERTICAL boundary
+     * only and says nothing about horizontal enterability -- in C-COM a
+     * gravlift shaft passes sight vertically whether or not a unit can walk
+     * into it. The two are deliberately not coupled.
+     */
+    KT_CELL_LEVEL_LINK = 1u << 1
 };
 
 typedef struct kt_cell {
@@ -62,7 +70,27 @@ typedef struct kt_cell {
     uint8_t cover_half;   /* 8-direction mask, facing the attacker         */
     uint8_t cover_full;   /* 8-direction mask; full wins over half         */
     uint8_t flags;
-    uint8_t reserved;
+    /*
+     * How tall this cell's own occupant is, in game-defined units, for games
+     * whose sight test interpolates a ray height. The engine passes it to the
+     * sight veto and never interprets it. 0 means "no opinion".
+     */
+    uint8_t opacity_height;
+    /*
+     * Extra traversal cost carried by this cell's west and north boundaries,
+     * in game-defined units. C-COM's doors and rubble walls are crossable but
+     * expensive, which no boolean bit can express. The engine NEVER
+     * interprets these; they travel with the cell so a step-cost hook can
+     * read them without a second lookup table.
+     */
+    uint8_t wall_cost[KT_WALL_SIDE_COUNT];
+    /*
+     * Per-direction blocking that the west/north wall model cannot represent.
+     * Kilix Advanced Tactics can mark a single diagonal edge blocked, which
+     * two orthogonal wall sides provably cannot encode. Consulted by
+     * kt_edge_blocked as an additional term on the MOVE channel only.
+     */
+    uint8_t diag_block;
 } kt_cell;
 
 typedef struct kt_map {

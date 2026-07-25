@@ -298,6 +298,66 @@ static void blend_rgba_pixel(ki_td_soft_renderer *renderer, int x, int y,
                            alpha * (pixel[3] / 255.0f));
 }
 
+static void blend_rgba_integer_block(ki_td_soft_renderer *renderer,
+                                     int64_t left, int64_t top,
+                                     int64_t right, int64_t bottom,
+                                     const uint8_t *pixel, float alpha)
+{
+    sr_canvas *canvas = &renderer->canvas;
+    float pixel_alpha;
+    int alpha256;
+    int first_x;
+    int first_y;
+    int last_x;
+    int last_y;
+    uint32_t rgb;
+    int y;
+    if (pixel[3] < 8u || right <= canvas->clip_x0 ||
+        bottom <= canvas->clip_y0 || left >= canvas->clip_x1 ||
+        top >= canvas->clip_y1)
+        return;
+    first_x = left < canvas->clip_x0 ? canvas->clip_x0 : (int)left;
+    first_y = top < canvas->clip_y0 ? canvas->clip_y0 : (int)top;
+    last_x = right > canvas->clip_x1 ? canvas->clip_x1 : (int)right;
+    last_y = bottom > canvas->clip_y1 ? canvas->clip_y1 : (int)bottom;
+    pixel_alpha = alpha * ((float)pixel[3] / 255.0f);
+    alpha256 = (int)(pixel_alpha * 256.0f + 0.5f);
+    if (alpha256 <= 0) return;
+    if (alpha256 > 256) alpha256 = 256;
+    rgb = ((uint32_t)pixel[0] << 16) |
+          ((uint32_t)pixel[1] << 8) |
+          (uint32_t)pixel[2];
+    for (y = first_y; y < last_y; ++y) {
+        int x;
+        for (x = first_x; x < last_x; ++x) {
+            uint32_t *destination =
+                &canvas->px[(size_t)y * (size_t)canvas->w + (size_t)x];
+            if (alpha256 == 256) {
+                *destination = UINT32_C(0xff000000) | rgb;
+            } else {
+                uint32_t current = *destination;
+                int red = (int)((current >> 16) & UINT32_C(255));
+                int green = (int)((current >> 8) & UINT32_C(255));
+                int blue = (int)(current & UINT32_C(255));
+                int output_alpha = (int)(current >> 24);
+                red +=
+                    (((int)pixel[0] - red) * alpha256) >> 8;
+                green +=
+                    (((int)pixel[1] - green) * alpha256) >> 8;
+                blue +=
+                    (((int)pixel[2] - blue) * alpha256) >> 8;
+                output_alpha +=
+                    ((255 - output_alpha) * alpha256) >> 8;
+                *destination =
+                    (uint32_t)output_alpha << 24 |
+                    (uint32_t)red << 16 |
+                    (uint32_t)green << 8 |
+                    (uint32_t)blue;
+            }
+        }
+    }
+}
+
 static void fill_rgba_world_pixel(ki_td_soft_renderer *renderer,
                                   const ki_td_view *view, float x, float y,
                                   const uint8_t *pixel, float alpha)
@@ -335,9 +395,33 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
                              const ki_td_rgba8 *image, int width, int height,
                              float alpha)
 {
-    if (!renderer || !view || !ki_td_rgba8_is_valid(image) || width <= 0 ||
-        height <= 0)
+    int integer_scale;
+    if (!renderer_is_ready(renderer) || !view ||
+        !ki_td_rgba8_is_valid(image) || width <= 0 || height <= 0)
         return;
+    integer_scale = (int)floorf(view->scale + 0.5f);
+    if (integer_scale >= 1 &&
+        fabsf(view->scale - (float)integer_scale) <= 0.01f) {
+        int origin_x = ki_td_screen_x(view, x);
+        int origin_y = ki_td_screen_y(view, y);
+        for (int yy = 0; yy < height; yy++) {
+            int source_y = yy * image->height / height;
+            int64_t top =
+                (int64_t)origin_y + (int64_t)yy * integer_scale;
+            int64_t bottom = top + integer_scale;
+            for (int xx = 0; xx < width; xx++) {
+                const uint8_t *pixel;
+                int source_x = xx * image->width / width;
+                int64_t left =
+                    (int64_t)origin_x + (int64_t)xx * integer_scale;
+                int64_t right = left + integer_scale;
+                pixel = image_pixel(image, source_x, source_y);
+                blend_rgba_integer_block(
+                    renderer, left, top, right, bottom, pixel, alpha);
+            }
+        }
+        return;
+    }
     for (int yy = 0; yy < height; yy++) {
         int source_y = yy * image->height / height;
         for (int xx = 0; xx < width; xx++) {

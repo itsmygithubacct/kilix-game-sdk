@@ -372,16 +372,25 @@ kt_status kt_depth_key(const kt_map *map, const kt_projection *projection,
      */
     if (projection->depth_order == KT_DEPTH_LEVEL_MAJOR) {
         /*
-         * Level is the most significant term, so every cell of level z paints
-         * before any cell of z+1 regardless of its diagonal row. Each field
-         * stays inside its radix (span <= KT_MAP_MAX_SPAN, so the row sum is
-         * under 2*KT_MAP_MAX_SPAN), and the packing cannot carry between them.
+         * A literal transcription of a `for z { for vx { for vy } }` terrain
+         * pass: level, then view.x, then view.y.
+         *
+         * An earlier version used the diagonal row as the middle term. That
+         * was wrong, and not harmlessly so: over a 40x40x4 grid it inverted
+         * against the emission order 156 times per frame, once at every
+         * vx-loop boundary. The inversions are reachable content, not ties --
+         * a 2x2 unit plate is 64 px wide and a walking unit is offset up to
+         * 16 px, so two cells the diagonal argument treats as too far apart to
+         * overlap can and do overlap.
+         *
+         * Radix: view.x and view.y are both < KT_MAP_MAX_SPAN, so
+         * view.x * SPAN + view.y < SPAN * SPAN and the level term cannot
+         * carry into them.
          */
-        *out_key = (int64_t)world.z * (2 * (int64_t)KT_MAP_MAX_SPAN *
+        *out_key = (int64_t)world.z * ((int64_t)KT_MAP_MAX_SPAN *
                                        (int64_t)KT_MAP_MAX_SPAN) +
-                   ((int64_t)view.x + (int64_t)view.y) *
-                       (int64_t)KT_MAP_MAX_SPAN +
-                   (int64_t)view.x;
+                   (int64_t)view.x * (int64_t)KT_MAP_MAX_SPAN +
+                   (int64_t)view.y;
         return KT_OK;
     }
     *out_key = ((int64_t)view.x + (int64_t)view.y) *
@@ -412,8 +421,18 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
     if (camera->view_level < top) {
         top = camera->view_level;
     }
+    /*
+     * Widen by the elevation span before giving up. A cell whose elevation is
+     * negative sits at or below a cutaway that its LEVEL index is above, and
+     * on a single-level grid any negative view_level would otherwise return
+     * immediately -- which is precisely the game that carries all its height
+     * in elevation.
+     */
     if (top < 0) {
-        return KT_ERR_UNREACHABLE;
+        if (map->elevation_span == 0 || top < -map->elevation_span) {
+            return KT_ERR_UNREACHABLE;
+        }
+        top = 0;
     }
 
     /*

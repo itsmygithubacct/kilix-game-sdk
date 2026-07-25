@@ -1343,6 +1343,35 @@ static void test_depth_order_modes(void)
     check(a_diag < b_diag, "diagonal-major paints the raised cell first");
     check(a_level > b_level, "level-major paints the raised cell last");
 
+    /*
+     * Level-major must be a literal transcription of `for z { for vx { for vy
+     * } }`, so the key is monotonic in that emission order with NO inversions.
+     * An earlier version used the diagonal row as the middle term and inverted
+     * 156 times per frame at the vx-loop boundaries.
+     */
+    {
+        int64_t previous = INT64_MIN;
+        int inversions = 0;
+        int z, vx, vy;
+
+        for (z = 0; z < CCOM_D; ++z) {
+            for (vx = 0; vx < CCOM_W; ++vx) {
+                for (vy = 0; vy < CCOM_H; ++vy) {
+                    int64_t key;
+
+                    kt_depth_key(&map, &level_major, &camera,
+                                 kt_cell_point_make(vx, vy, z), &key);
+                    if (key <= previous) {
+                        ++inversions;
+                    }
+                    previous = key;
+                }
+            }
+        }
+        check_eq(inversions, 0,
+                 "level-major is monotonic in for z { for x { for y } } order");
+    }
+
     /* Level-major must group every cell of a level together. */
     {
         int64_t max_low = INT64_MIN;
@@ -1452,10 +1481,19 @@ static void test_elevation_cutaway(void)
     camera.origin_x = 400;
     camera.origin_y = 100;
 
+    /*
+     * Probe the raised cell's own projected origin and require that the pick
+     * actually RESOLVES TO IT above the cutaway. The earlier form asserted
+     * only "not this cell OR not ok" below the cutaway, which a nearer flat
+     * cell satisfied on its own -- the assertion passed without the cutaway
+     * ever being exercised.
+     */
     camera.view_level = 5;
     kt_project(&map, &projection, &camera, kt_cell_point_make(6, 6, 0), &at);
     check_eq(kt_pick_cell(&map, &projection, &camera, at, &got), KT_OK,
-             "raised cell picks below the cutaway");
+             "pick resolves above the cutaway");
+    check(kt_cell_point_equal(got, kt_cell_point_make(6, 6, 0)),
+          "and resolves to the raised cell itself");
 
     /* Cut away below its elevation: it must vanish even though its LEVEL
      * index is still 0. That is the whole point. */

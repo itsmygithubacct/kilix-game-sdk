@@ -550,6 +550,29 @@ kt_status kt_nav_reachable_collect(const kt_map *map,
     return KT_OK;
 }
 
+kt_status kt_nav_predecessor(const kt_map *map,
+                             const kt_nav_workspace *workspace,
+                             kt_cell_point point, kt_cell_point *out)
+{
+    size_t index;
+
+    if (map == NULL || workspace == NULL || out == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    if (!kt_nav_was_reached(map, workspace, point)) {
+        return KT_ERR_UNREACHABLE;
+    }
+    index = kt_map_index(map, point);
+    if (workspace->nodes[index].parent < 0) {
+        return KT_ERR_UNREACHABLE;   /* the start cell has no predecessor */
+    }
+    if (!kt_map_point_from_index(map, (size_t)workspace->nodes[index].parent,
+                                 out)) {
+        return KT_ERR_STATE;
+    }
+    return KT_OK;
+}
+
 bool kt_nav_was_reached(const kt_map *map, const kt_nav_workspace *workspace,
                         kt_cell_point point)
 {

@@ -197,6 +197,19 @@ kt_status kt_nav_reachable_collect(const kt_map *map,
                                    kt_cell_point *out_cells, size_t capacity,
                                    size_t *out_count);
 
+/*
+ * Predecessor of a reached cell on the tree the most recent search built.
+ * Returns KT_ERR_UNREACHABLE for the start cell, which has none, and for any
+ * cell the search did not reach.
+ *
+ * Exposed because a game may keep its own parent array that other code reads
+ * directly; without this it would have to reach into kt_nav_node, which is
+ * public only so callers can supply storage.
+ */
+kt_status kt_nav_predecessor(const kt_map *map,
+                             const kt_nav_workspace *workspace,
+                             kt_cell_point point, kt_cell_point *out);
+
 /* Valid only against the most recent search on this workspace. */
 bool kt_nav_was_reached(const kt_map *map, const kt_nav_workspace *workspace,
                         kt_cell_point point);

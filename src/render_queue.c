@@ -101,6 +101,21 @@ kt_status kt_draw_submit_at(kt_draw_queue *queue, const kt_map *map,
     return kt_draw_push(queue, depth, at, sort_cell, layer, handle, out_item);
 }
 
+kt_status kt_draw_submit_keyed(kt_draw_queue *queue, int64_t depth,
+                               uint16_t layer, uint32_t handle,
+                               kt_draw_item **out_item)
+{
+    kt_screen_point at;
+
+    if (queue == NULL || queue->items == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    at.x = 0;
+    at.y = 0;
+    return kt_draw_push(queue, depth, at, kt_cell_point_make(0, 0, 0), layer,
+                        handle, out_item);
+}
+
 static bool kt_draw_before(const kt_draw_item *a, const kt_draw_item *b)
 {
     if (a->depth != b->depth) {

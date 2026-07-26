@@ -81,6 +81,22 @@ kt_status kt_draw_submit_at(kt_draw_queue *queue, const kt_map *map,
                             kt_draw_item **out_item);
 
 /*
+ * Submit with a caller-computed depth and no map at all.
+ *
+ * The two built-in depth orders are painter policies, and painter policy is a
+ * game rule -- it decides what the player sees. A game whose ordering is
+ * neither of them supplies its own key here rather than the engine growing a
+ * mode per consumer. The engine still owns the queue: bounded storage, a total
+ * and stable order, and the hash.
+ *
+ * The key must be monotone in whatever the game orders by, and the engine
+ * breaks remaining ties by layer then submission index.
+ */
+kt_status kt_draw_submit_keyed(kt_draw_queue *queue, int64_t depth,
+                               uint16_t layer, uint32_t handle,
+                               kt_draw_item **out_item);
+
+/*
  * Sort into painter order: depth, then layer, then submission index. The
  * order is total, so identical submissions always yield an identical queue.
  */

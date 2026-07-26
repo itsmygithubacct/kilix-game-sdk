@@ -1503,6 +1503,82 @@ static void test_elevation_cutaway(void)
           "raised cell is cut away by elevation, not just level index");
 }
 
+
+/*
+ * The cross-level corner is open if EITHER ordering is. Before this rule the
+ * engine evaluated only "move across at the old level, then pierce the deck at
+ * the destination column", which made the other ordering unreachable.
+ */
+static void test_level_corner_two_routes(void)
+{
+    kt_map map;
+    size_t i;
+    kt_cell_point from = kt_cell_point_make(3, 3, 0);
+    kt_cell_point to = kt_cell_point_make(4, 3, 1);
+
+    printf("cross-level corner: either ordering opens it\n");
+
+    /* Baseline: every deck intact, so both orderings are sealed. */
+    kt_map_init(&map, CCOM_W, CCOM_H, CCOM_D, g_ccom_cells,
+                sizeof(g_ccom_cells) / sizeof(g_ccom_cells[0]));
+    for (i = 0; i < kt_map_cell_count(&map); ++i) {
+        memset(&g_ccom_cells[i], 0, sizeof(g_ccom_cells[i]));
+        g_ccom_cells[i].move_cost = 4u;
+        g_ccom_cells[i].flags = KT_CELL_HAS_FLOOR;
+    }
+    kt_map_validate(&map);
+    check(!kt_sight_line(&map, NULL, from, to, KT_CHANNEL_SIGHT),
+          "both orderings sealed");
+
+    /*
+     * Open ONLY the second ordering: a wall blocks the horizontal move at the
+     * OLD level, while the deck above the SOURCE column is linked and the
+     * horizontal move at the NEW level is clear. The first ordering is
+     * blocked at its very first test, so a correct answer here is only
+     * reachable via the second.
+     */
+    kt_map_cell(&map, kt_cell_point_make(4, 3, 0))->wall[KT_WALL_WEST] =
+        KT_WALL_BLOCKS_SIGHT;
+    kt_map_cell(&map, kt_cell_point_make(3, 3, 0))->flags =
+        (uint8_t)(KT_CELL_HAS_FLOOR | KT_CELL_LEVEL_LINK);
+    kt_map_validate(&map);
+    check(kt_sight_line(&map, NULL, from, to, KT_CHANNEL_SIGHT),
+          "second ordering alone opens the corner");
+
+    /* Block the new-level move as well and it must close again. */
+    kt_map_cell(&map, kt_cell_point_make(4, 3, 1))->wall[KT_WALL_WEST] =
+        KT_WALL_BLOCKS_SIGHT;
+    kt_map_validate(&map);
+    check(!kt_sight_line(&map, NULL, from, to, KT_CHANNEL_SIGHT),
+          "both orderings blocked closes it again");
+
+    /*
+     * Open ONLY the first ordering: clear the old-level wall and seal the
+     * source column, leaving the destination column linked.
+     */
+    kt_map_cell(&map, kt_cell_point_make(4, 3, 0))->wall[KT_WALL_WEST] = 0u;
+    kt_map_cell(&map, kt_cell_point_make(3, 3, 0))->flags = KT_CELL_HAS_FLOOR;
+    kt_map_cell(&map, kt_cell_point_make(4, 3, 0))->flags =
+        (uint8_t)(KT_CELL_HAS_FLOOR | KT_CELL_LEVEL_LINK);
+    kt_map_validate(&map);
+    check(kt_sight_line(&map, NULL, from, to, KT_CHANNEL_SIGHT),
+          "first ordering alone still opens the corner");
+
+    /* A purely vertical step has no horizontal component, so the deck test
+     * alone must still govern it. */
+    kt_map_cell(&map, kt_cell_point_make(4, 3, 0))->flags = KT_CELL_HAS_FLOOR;
+    kt_map_validate(&map);
+    check(!kt_sight_line(&map, NULL, kt_cell_point_make(7, 7, 0),
+                         kt_cell_point_make(7, 7, 1), KT_CHANNEL_SIGHT),
+          "vertical step still sealed by its own deck");
+    kt_map_cell(&map, kt_cell_point_make(7, 7, 1))->flags =
+        (uint8_t)(KT_CELL_HAS_FLOOR | KT_CELL_LEVEL_LINK);
+    kt_map_validate(&map);
+    check(kt_sight_line(&map, NULL, kt_cell_point_make(7, 7, 0),
+                        kt_cell_point_make(7, 7, 1), KT_CHANNEL_SIGHT),
+          "vertical step opened by its own link");
+}
+
 static kt_draw_item g_draw_items[512];
 
 static void test_draw_queue(void)
@@ -1608,6 +1684,7 @@ int main(void)
     test_ray_geometry();
     test_migration_capabilities();
     test_level_link_from_below();
+    test_level_corner_two_routes();
     test_priority_and_tiebreak();
     test_depth_order_modes();
     test_reachable_collect();

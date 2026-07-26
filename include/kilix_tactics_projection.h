@@ -158,6 +158,30 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
                        kt_cell_point *out_world);
 
 /*
+ * Enumerate EVERY cell whose floor diamond contains the point, rather than
+ * ranking them.
+ *
+ * kt_pick_cell() ranks candidates by kt_depth_key(), which is one painter
+ * policy among several. A game whose own pick ordering differs -- and picking
+ * order IS a game rule, since it decides what the player selects -- takes the
+ * candidate set from here and ranks it itself.
+ *
+ * `radius` widens the view-space sweep around the closed-form inverse. The
+ * inverse un-zooms with floor division while the forward transform rounds the
+ * accumulated value, so at some zooms the exact candidate lands more than one
+ * cell away. Widening is safe: every candidate still has to pass the exact
+ * diamond test, so extra probes can only surface cells that genuinely contain
+ * the point. Use 1 unless a differential harness shows cells being missed.
+ *
+ * Reports the number written, and returns KT_ERR_CAPACITY if the buffer was
+ * too small to hold them all.
+ */
+kt_status kt_pick_cell_all(const kt_map *map, const kt_projection *projection,
+                           const kt_camera *camera, kt_screen_point screen,
+                           int32_t radius, kt_cell_point *out_cells,
+                           size_t capacity, size_t *out_count);
+
+/*
  * Painter depth key for a world cell. Ordering is by rotated (x + y), then
  * level, then rotated x, so nearer and higher cells sort later. The last
  * term makes the key total over distinct cells, which keeps paint order

@@ -399,48 +399,47 @@ kt_status kt_depth_key(const kt_map *map, const kt_projection *projection,
     return KT_OK;
 }
 
-kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
-                       const kt_camera *camera, kt_screen_point screen,
-                       kt_cell_point *out_world)
+/*
+ * Shared candidate sweep. Emits every cell whose floor diamond contains the
+ * point. kt_pick_cell() ranks the emissions; kt_pick_cell_all() reports them.
+ */
+static kt_status kt_pick_sweep(const kt_map *map,
+                               const kt_projection *projection,
+                               const kt_camera *camera, kt_screen_point screen,
+                               int32_t radius, kt_cell_point *out_cells,
+                               size_t capacity, size_t *out_count,
+                               kt_cell_point *out_best, bool *out_found)
 {
     int32_t level;
     int32_t top;
     int32_t band;
     bool found = false;
     int64_t best_key = 0;
+    size_t written = 0u;
     kt_cell_point best;
 
-    if (map == NULL || projection == NULL || camera == NULL ||
-        out_world == NULL) {
+    if (map == NULL || projection == NULL || camera == NULL) {
         return KT_ERR_ARGUMENT;
     }
-    if (camera->zoom_percent == 0u) {
+    if (camera->zoom_percent == 0u || radius < 0) {
         return KT_ERR_RANGE;
     }
     top = map->levels - 1;
     if (camera->view_level < top) {
         top = camera->view_level;
     }
-    /*
-     * Widen by the elevation span before giving up. A cell whose elevation is
-     * negative sits at or below a cutaway that its LEVEL index is above, and
-     * on a single-level grid any negative view_level would otherwise return
-     * immediately -- which is precisely the game that carries all its height
-     * in elevation.
-     */
     if (top < 0) {
         if (map->elevation_span == 0 || top < -map->elevation_span) {
-            return KT_ERR_UNREACHABLE;
+            if (out_found != NULL) {
+                *out_found = false;
+            }
+            if (out_count != NULL) {
+                *out_count = 0u;
+            }
+            return KT_OK;
         }
         top = 0;
     }
-
-    /*
-     * A cell drawn with a positive elevation appears where a cell that many
-     * steps nearer would sit on a flat map, so the closed-form inverse can
-     * miss it. Sweep the band those offsets span; on a flat map the band is
-     * a single probe and this stays O(levels).
-     */
     band = map->elevation_span;
     best.x = 0;
     best.y = 0;
@@ -460,87 +459,126 @@ kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
             }
             base_view.z = level;
 
-            /*
-             * The closed-form inverse inverts the UNROUNDED transform, but the
-             * forward transform rounds when zoom is not 100, so the exact
-             * candidate can land one cell off: at zoom 80 that missed 256 of
-             * 400 projected cell centres. Sweep the immediate view
-             * neighbourhood and let the diamond test below decide, which is
-             * exact at every zoom. At zoom 100 the centre probe always wins,
-             * so this costs nothing where the inverse is already exact.
-             */
-            for (dvy = -1; dvy <= 1; ++dvy)
-            for (dvx = -1; dvx <= 1; ++dvx) {
-            kt_cell_point view;
-            kt_cell_point candidate;
-            kt_screen_point origin;
-            const kt_cell *cell;
-            int64_t key;
-            int64_t dx;
-            int64_t dy;
-            int64_t half_w;
-            int64_t half_h;
+            for (dvy = -radius; dvy <= radius; ++dvy)
+            for (dvx = -radius; dvx <= radius; ++dvx) {
+                kt_cell_point view;
+                kt_cell_point candidate;
+                kt_screen_point origin;
+                const kt_cell *cell;
+                int64_t key;
+                int64_t dx;
+                int64_t dy;
+                int64_t half_w;
+                int64_t half_h;
+                size_t seen;
 
-            view.x = base_view.x + dvx;
-            view.y = base_view.y + dvy;
-            view.z = level;
-            if (kt_rotate_to_world(map, projection, camera, view, &candidate) !=
-                KT_OK) {
-                continue;
-            }
-            cell = kt_map_cell_const(map, candidate);
-            if (cell == NULL || (int32_t)cell->elevation != offset) {
-                continue;
-            }
-            /*
-             * Cutaway is elevation-aware: a cell raised above the viewing
-             * level is suppressed even when its level index is not. A no-op
-             * for a game that leaves elevation 0 and expresses height purely
-             * as a level index.
-             */
-            if (candidate.z + (int32_t)cell->elevation > camera->view_level) {
-                continue;
-            }
-            if (kt_project(map, projection, camera, candidate, &origin) !=
-                KT_OK) {
-                continue;
-            }
+                view.x = base_view.x + dvx;
+                view.y = base_view.y + dvy;
+                view.z = level;
+                if (kt_rotate_to_world(map, projection, camera, view,
+                                       &candidate) != KT_OK) {
+                    continue;
+                }
+                cell = kt_map_cell_const(map, candidate);
+                if (cell == NULL || (int32_t)cell->elevation != offset) {
+                    continue;
+                }
+                if (candidate.z + (int32_t)cell->elevation >
+                    camera->view_level) {
+                    continue;
+                }
+                if (kt_project(map, projection, camera, candidate, &origin) !=
+                    KT_OK) {
+                    continue;
+                }
+                half_w = kt_scale_zoom(projection->tile_width / 2,
+                                       camera->zoom_percent);
+                half_h = kt_scale_zoom(projection->tile_height / 2,
+                                       camera->zoom_percent);
+                if (half_w <= 0 || half_h <= 0) {
+                    continue;
+                }
+                dx = (int64_t)screen.x - (int64_t)origin.x;
+                dy = (int64_t)screen.y - (int64_t)origin.y;
+                if (dx < 0) {
+                    dx = -dx;
+                }
+                if (dy < 0) {
+                    dy = -dy;
+                }
+                if (dx * half_h + dy * half_w > half_w * half_h) {
+                    continue;
+                }
 
-            /*
-             * Confirm the point really is inside this cell's floor diamond.
-             * The projected point is the cell's raw origin, and the diamond
-             * is the tile_width x tile_height rhombus centred half a tile
-             * to its right and half a tile down.
-             */
-            half_w = kt_scale_zoom(projection->tile_width / 2,
-                                   camera->zoom_percent);
-            half_h = kt_scale_zoom(projection->tile_height / 2,
-                                   camera->zoom_percent);
-            if (half_w <= 0 || half_h <= 0) {
-                continue;
-            }
-            dx = (int64_t)screen.x - (int64_t)origin.x;
-            dy = (int64_t)screen.y - (int64_t)origin.y;
-            if (dx < 0) {
-                dx = -dx;
-            }
-            if (dy < 0) {
-                dy = -dy;
-            }
-            if (dx * half_h + dy * half_w > half_w * half_h) {
-                continue;
-            }
-            if (kt_depth_key(map, projection, camera, candidate, &key) !=
-                KT_OK) {
-                continue;
-            }
-            if (!found || key > best_key) {
-                found = true;
-                best_key = key;
-                best = candidate;
-            }
+                /* The sweep can reach the same cell from several probes. */
+                for (seen = 0u; seen < written; ++seen) {
+                    if (out_cells != NULL &&
+                        kt_cell_point_equal(out_cells[seen], candidate)) {
+                        break;
+                    }
+                }
+                if (out_cells != NULL && seen < written) {
+                    continue;
+                }
+                if (out_cells != NULL) {
+                    if (written >= capacity) {
+                        return KT_ERR_CAPACITY;
+                    }
+                    out_cells[written] = candidate;
+                }
+                ++written;
+
+                if (kt_depth_key(map, projection, camera, candidate, &key) !=
+                    KT_OK) {
+                    continue;
+                }
+                if (!found || key > best_key) {
+                    found = true;
+                    best_key = key;
+                    best = candidate;
+                }
             }
         }
+    }
+    if (out_count != NULL) {
+        *out_count = written;
+    }
+    if (out_found != NULL) {
+        *out_found = found;
+    }
+    if (out_best != NULL) {
+        *out_best = best;
+    }
+    return KT_OK;
+}
+
+kt_status kt_pick_cell_all(const kt_map *map, const kt_projection *projection,
+                           const kt_camera *camera, kt_screen_point screen,
+                           int32_t radius, kt_cell_point *out_cells,
+                           size_t capacity, size_t *out_count)
+{
+    if (out_cells == NULL || out_count == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    return kt_pick_sweep(map, projection, camera, screen, radius, out_cells,
+                         capacity, out_count, NULL, NULL);
+}
+
+kt_status kt_pick_cell(const kt_map *map, const kt_projection *projection,
+                       const kt_camera *camera, kt_screen_point screen,
+                       kt_cell_point *out_world)
+{
+    kt_cell_point best;
+    bool found = false;
+    kt_status status;
+
+    if (out_world == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    status = kt_pick_sweep(map, projection, camera, screen, 1, NULL, 0u, NULL,
+                           &best, &found);
+    if (status != KT_OK) {
+        return status;
     }
     if (!found) {
         return KT_ERR_UNREACHABLE;

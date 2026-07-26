@@ -763,8 +763,7 @@ static void test_sight(void)
     {
         kt_sight_hooks hooks;
 
-        hooks.veto = NULL;
-        hooks.user = NULL;
+        kt_sight_hooks_init(&hooks);
         check(kt_sight_line(&map, &hooks, kt_cell_point_make(1, 1, 0),
                             kt_cell_point_make(8, 1, 0), KT_CHANNEL_SIGHT),
               "null veto passes");

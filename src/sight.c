@@ -46,6 +46,17 @@ size_t kt_edge_tests(kt_direction dir, kt_edge_test *out, size_t capacity)
     return count;
 }
 
+void kt_sight_hooks_init(kt_sight_hooks *hooks)
+{
+    if (hooks == NULL) {
+        return;
+    }
+    hooks->veto = NULL;
+    hooks->veto_at = NULL;
+    hooks->user = NULL;
+    hooks->rule = KT_TRACE_NEAREST;
+}
+
 bool kt_edge_blocked(const kt_map *map, kt_cell_point from, kt_direction dir,
                      kt_channel channel)
 {
@@ -199,6 +210,14 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
     int32_t index;
     size_t written = 0u;
     kt_cell_point previous = from;
+    kt_trace_rule rule = hooks != NULL ? hooks->rule : KT_TRACE_NEAREST;
+    int32_t adx = dx < 0 ? -dx : dx;
+    int32_t ady = dy < 0 ? -dy : dy;
+    int32_t walk_x = from.x;
+    int32_t walk_y = from.y;
+    int32_t error = adx - ady;
+    int32_t sx = dx >= 0 ? 1 : -1;
+    int32_t sy = dy >= 0 ? 1 : -1;
 
     if (out_blocked != NULL) {
         *out_blocked = false;
@@ -213,7 +232,14 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
     if ((dy < 0 ? -dy : dy) > steps) {
         steps = dy < 0 ? -dy : dy;
     }
-    if ((dz < 0 ? -dz : dz) > steps) {
+    if (rule == KT_TRACE_BRESENHAM_ERROR) {
+        /* The vertical run cannot join the fold here: raising the step count
+         * would stall the horizontal advance and change which cells are
+         * visited. A ray that needs it is simply not expressible. */
+        if ((dz < 0 ? -dz : dz) > steps) {
+            return KT_ERR_RANGE;
+        }
+    } else if ((dz < 0 ? -dz : dz) > steps) {
         steps = dz < 0 ? -dz : dz;
     }
     if (steps == 0) {
@@ -230,11 +256,27 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
         kt_cell_point at;
         int32_t next_z;
 
-        /* Round to nearest, away from zero, so the ray is symmetric. */
-        at.x = from.x + (dx * index * 2 + (dx >= 0 ? steps : -steps)) /
-                            (steps * 2);
-        at.y = from.y + (dy * index * 2 + (dy >= 0 ? steps : -steps)) /
-                            (steps * 2);
+        if (rule == KT_TRACE_BRESENHAM_ERROR) {
+            /* Incremental error walk; both axes may advance in one step. */
+            int32_t twice = error * 2;
+
+            if (twice > -ady) {
+                error -= ady;
+                walk_x += sx;
+            }
+            if (twice < adx) {
+                error += adx;
+                walk_y += sy;
+            }
+            at.x = walk_x;
+            at.y = walk_y;
+        } else {
+            /* Round to nearest, away from zero, so the ray is symmetric. */
+            at.x = from.x + (dx * index * 2 + (dx >= 0 ? steps : -steps)) /
+                                (steps * 2);
+            at.y = from.y + (dy * index * 2 + (dy >= 0 ? steps : -steps)) /
+                                (steps * 2);
+        }
         next_z = from.z + (dz * index * 2 + (dz >= 0 ? steps : -steps)) /
                               (steps * 2);
         at.z = previous.z;
@@ -305,8 +347,24 @@ static kt_status kt_walk_line(const kt_map *map, kt_cell_point from,
                 }
                 break;
             }
-            if (!geometry_only && hooks != NULL && hooks->veto != NULL &&
-                hooks->veto(hooks->user, at)) {
+            if (!geometry_only && hooks != NULL && hooks->veto_at != NULL) {
+                kt_sight_step where;
+
+                where.cell = at;
+                where.from = from;
+                where.to = to;
+                where.step = index;
+                where.steps = steps;
+                where.channel = channel;
+                if (hooks->veto_at(hooks->user, &where)) {
+                    if (out_blocked != NULL) {
+                        *out_blocked = true;
+                    }
+                    break;
+                }
+            }
+            if (!geometry_only && hooks != NULL && hooks->veto_at == NULL &&
+                hooks->veto != NULL && hooks->veto(hooks->user, at)) {
                 if (out_blocked != NULL) {
                     *out_blocked = true;
                 }

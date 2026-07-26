@@ -86,10 +86,55 @@ bool kt_sight_blocked_step(const kt_map *map, kt_cell_point from,
  */
 typedef bool (*kt_sight_veto_fn)(void *user, kt_cell_point cell);
 
+/*
+ * Where the trace currently is. A game whose sight test interpolates a ray
+ * HEIGHT needs the position along the ray, not just the cell, and cannot
+ * recompute it from the cell alone on a diagonal walk.
+ */
+typedef struct kt_sight_step {
+    kt_cell_point cell;
+    kt_cell_point from;
+    kt_cell_point to;
+    int32_t step;            /* 1-based index along the ray */
+    int32_t steps;           /* total steps the ray takes */
+    kt_channel channel;
+} kt_sight_step;
+
+typedef bool (*kt_sight_veto_at_fn)(void *user, const kt_sight_step *at);
+
+/*
+ * How the ray is rasterised. The two visit genuinely different cells -- 36.8%
+ * of rays within radius 16 -- so this is a per-consumer choice, not a detail.
+ */
+typedef enum kt_trace_rule {
+    /*
+     * Round-to-nearest parametric interpolation, symmetric, and the only rule
+     * that folds the vertical axis into the step count. Required for
+     * cross-level rays. The default.
+     */
+    KT_TRACE_NEAREST = 0,
+    /*
+     * Incremental error-term walk. Horizontal only: folding the vertical run
+     * into the step count would stall the horizontal advance, so a ray whose
+     * vertical run exceeds its horizontal one is not expressible and reports
+     * KT_ERR_RANGE.
+     */
+    KT_TRACE_BRESENHAM_ERROR
+} kt_trace_rule;
+
 typedef struct kt_sight_hooks {
-    kt_sight_veto_fn veto;   /* may be NULL */
+    kt_sight_veto_fn veto;         /* may be NULL */
+    kt_sight_veto_at_fn veto_at;   /* may be NULL; wins over veto */
     void *user;
+    kt_trace_rule rule;
 } kt_sight_hooks;
+
+/*
+ * Zero the hooks and select the defaults. Use this rather than assigning
+ * fields: the struct has grown before and will again, and a field-by-field
+ * initialisation silently leaves new members indeterminate.
+ */
+void kt_sight_hooks_init(kt_sight_hooks *hooks);
 
 /*
  * Full cell-to-cell trace. Within a level this is the exact Bresenham walk

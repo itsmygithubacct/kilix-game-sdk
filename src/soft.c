@@ -204,11 +204,102 @@ void ki_td_soft_blend_pixel(ki_td_soft_renderer *renderer, int x, int y,
     if (renderer) sr_blend(&renderer->canvas, x, y, rgb, alpha);
 }
 
+static bool fill_integer_rect(ki_td_soft_renderer *renderer,
+                              float x, float y, float width, float height,
+                              uint32_t rgb, float alpha)
+{
+    sr_canvas *canvas;
+    float right_value;
+    float bottom_value;
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int alpha256;
+    int source_red;
+    int source_green;
+    int source_blue;
+    int row;
+    if (!renderer_is_ready(renderer) ||
+        !isfinite(x) || !isfinite(y) ||
+        !isfinite(width) || !isfinite(height) ||
+        !isfinite(alpha) || width <= 0.0f || height <= 0.0f)
+        return false;
+    right_value = x + width;
+    bottom_value = y + height;
+    if (!isfinite(right_value) || !isfinite(bottom_value) ||
+        (double)x < (double)INT_MIN || (double)x > (double)INT_MAX ||
+        (double)y < (double)INT_MIN || (double)y > (double)INT_MAX ||
+        (double)right_value < (double)INT_MIN ||
+        (double)right_value > (double)INT_MAX ||
+        (double)bottom_value < (double)INT_MIN ||
+        (double)bottom_value > (double)INT_MAX ||
+        floorf(x) != x || floorf(y) != y ||
+        floorf(right_value) != right_value ||
+        floorf(bottom_value) != bottom_value)
+        return false;
+    left = (int)x;
+    top = (int)y;
+    right = (int)right_value;
+    bottom = (int)bottom_value;
+    canvas = &renderer->canvas;
+    if (left < canvas->clip_x0) left = canvas->clip_x0;
+    if (top < canvas->clip_y0) top = canvas->clip_y0;
+    if (right > canvas->clip_x1) right = canvas->clip_x1;
+    if (bottom > canvas->clip_y1) bottom = canvas->clip_y1;
+    if (right <= left || bottom <= top) return true;
+    alpha256 = (int)(alpha * 256.0f + 0.5f);
+    if (alpha256 <= 0) return true;
+    if (alpha256 > 256) alpha256 = 256;
+    rgb &= UINT32_C(0x00ffffff);
+    if (alpha256 == 256) {
+        uint32_t value = UINT32_C(0xff000000) | rgb;
+        for (row = top; row < bottom; ++row) {
+            uint32_t *destination =
+                &canvas->px[(size_t)row * (size_t)canvas->w +
+                            (size_t)left];
+            int column;
+            for (column = left; column < right; ++column)
+                *destination++ = value;
+        }
+        return true;
+    }
+    source_red = (int)((rgb >> 16) & UINT32_C(255));
+    source_green = (int)((rgb >> 8) & UINT32_C(255));
+    source_blue = (int)(rgb & UINT32_C(255));
+    for (row = top; row < bottom; ++row) {
+        uint32_t *destination =
+            &canvas->px[(size_t)row * (size_t)canvas->w +
+                        (size_t)left];
+        int column;
+        for (column = left; column < right; ++column) {
+            uint32_t current = *destination;
+            int red = (int)((current >> 16) & UINT32_C(255));
+            int green = (int)((current >> 8) & UINT32_C(255));
+            int blue = (int)(current & UINT32_C(255));
+            int output_alpha = (int)(current >> 24);
+            red += ((source_red - red) * alpha256) >> 8;
+            green += ((source_green - green) * alpha256) >> 8;
+            blue += ((source_blue - blue) * alpha256) >> 8;
+            output_alpha +=
+                ((255 - output_alpha) * alpha256) >> 8;
+            *destination++ =
+                (uint32_t)output_alpha << 24 |
+                (uint32_t)red << 16 |
+                (uint32_t)green << 8 |
+                (uint32_t)blue;
+        }
+    }
+    return true;
+}
+
 void ki_td_soft_fill_rect_px(ki_td_soft_renderer *renderer, float x, float y,
                              float width, float height, uint32_t rgb,
                              float alpha)
 {
-    if (renderer)
+    if (renderer &&
+        !fill_integer_rect(
+            renderer, x, y, width, height, rgb, alpha))
         sr_fill_rect(&renderer->canvas, x, y, width, height, rgb, alpha);
 }
 
@@ -358,6 +449,81 @@ static void blend_rgba_integer_block(ki_td_soft_renderer *renderer,
     }
 }
 
+static void blend_rgba_scaled_block(ki_td_soft_renderer *renderer,
+                                    int left, int top, int span,
+                                    float edge_coverage,
+                                    const uint8_t *pixel, float alpha)
+{
+    sr_canvas *canvas = &renderer->canvas;
+    float pixel_alpha;
+    int first_x;
+    int first_y;
+    int last_x;
+    int last_y;
+    uint32_t rgb;
+    int y;
+    if (pixel[3] < 8u || span <= 0 || edge_coverage <= 0.0f ||
+        left >= canvas->clip_x1 || top >= canvas->clip_y1 ||
+        left + span <= canvas->clip_x0 ||
+        top + span <= canvas->clip_y0)
+        return;
+    first_x = left < canvas->clip_x0 ? canvas->clip_x0 : left;
+    first_y = top < canvas->clip_y0 ? canvas->clip_y0 : top;
+    last_x = left + span > canvas->clip_x1 ?
+             canvas->clip_x1 : left + span;
+    last_y = top + span > canvas->clip_y1 ?
+             canvas->clip_y1 : top + span;
+    pixel_alpha = alpha * ((float)pixel[3] / 255.0f);
+    rgb = ((uint32_t)pixel[0] << 16) |
+          ((uint32_t)pixel[1] << 8) |
+          (uint32_t)pixel[2];
+    for (y = first_y; y < last_y; ++y) {
+        float coverage_y =
+            y == top + span - 1 ? edge_coverage : 1.0f;
+        int x;
+        for (x = first_x; x < last_x; ++x) {
+            float coverage_x =
+                x == left + span - 1 ? edge_coverage : 1.0f;
+            int alpha256;
+            uint32_t *destination;
+            uint32_t current;
+            int red;
+            int green;
+            int blue;
+            int output_alpha;
+            destination =
+                &canvas->px[(size_t)y * (size_t)canvas->w + (size_t)x];
+            if (pixel[3] == 255u && alpha >= 1.0f &&
+                coverage_x == 1.0f && coverage_y == 1.0f) {
+                *destination = UINT32_C(0xff000000) | rgb;
+                continue;
+            }
+            alpha256 = (int)(
+                pixel_alpha * coverage_x * coverage_y * 256.0f + 0.5f);
+            if (alpha256 <= 0) continue;
+            if (alpha256 > 256) alpha256 = 256;
+            if (alpha256 == 256) {
+                *destination = UINT32_C(0xff000000) | rgb;
+                continue;
+            }
+            current = *destination;
+            red = (int)((current >> 16) & UINT32_C(255));
+            green = (int)((current >> 8) & UINT32_C(255));
+            blue = (int)(current & UINT32_C(255));
+            output_alpha = (int)(current >> 24);
+            red += (((int)pixel[0] - red) * alpha256) >> 8;
+            green += (((int)pixel[1] - green) * alpha256) >> 8;
+            blue += (((int)pixel[2] - blue) * alpha256) >> 8;
+            output_alpha += ((255 - output_alpha) * alpha256) >> 8;
+            *destination =
+                (uint32_t)output_alpha << 24 |
+                (uint32_t)red << 16 |
+                (uint32_t)green << 8 |
+                (uint32_t)blue;
+        }
+    }
+}
+
 static void fill_rgba_world_pixel(ki_td_soft_renderer *renderer,
                                   const ki_td_view *view, float x, float y,
                                   const uint8_t *pixel, float alpha)
@@ -396,6 +562,8 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
                              float alpha)
 {
     int integer_scale;
+    int scaled_span;
+    float edge_coverage;
     if (!renderer_is_ready(renderer) || !view ||
         !ki_td_rgba8_is_valid(image) || width <= 0 || height <= 0)
         return;
@@ -422,14 +590,18 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
         }
         return;
     }
+    scaled_span = (int)ceilf(view->scale);
+    edge_coverage =
+        view->scale - (float)(scaled_span - 1);
     for (int yy = 0; yy < height; yy++) {
         int source_y = yy * image->height / height;
+        int top = ki_td_screen_y(view, y + (float)yy);
         for (int xx = 0; xx < width; xx++) {
             int source_x = xx * image->width / width;
-            fill_rgba_world_pixel(renderer, view, x + (float)xx,
-                                  y + (float)yy,
-                                  image_pixel(image, source_x, source_y),
-                                  alpha);
+            int left = ki_td_screen_x(view, x + (float)xx);
+            blend_rgba_scaled_block(
+                renderer, left, top, scaled_span, edge_coverage,
+                image_pixel(image, source_x, source_y), alpha);
         }
     }
 }

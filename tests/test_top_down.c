@@ -252,6 +252,75 @@ static void test_adapter(void)
     ki_td_soft_renderer_destroy(&renderer);
 }
 
+static void reference_fractional_resize(
+    ki_td_soft_renderer *renderer, const ki_td_view *view,
+    float x, float y, const ki_td_rgba8 *image,
+    int width, int height, float alpha)
+{
+    int yy;
+    for (yy = 0; yy < height; ++yy) {
+        int source_y = yy * image->height / height;
+        int xx;
+        for (xx = 0; xx < width; ++xx) {
+            int source_x = xx * image->width / width;
+            const uint8_t *pixel =
+                image->pixels +
+                (size_t)source_y * image->stride +
+                (size_t)source_x * 4u;
+            uint32_t rgb;
+            if (pixel[3] < 8u) continue;
+            rgb = ((uint32_t)pixel[0] << 16) |
+                  ((uint32_t)pixel[1] << 8) |
+                  (uint32_t)pixel[2];
+            sr_fill_rect(
+                &renderer->canvas,
+                (float)ki_td_screen_x(view, x + (float)xx),
+                (float)ki_td_screen_y(view, y + (float)yy),
+                ki_td_screen_scale(view, 1.0f),
+                ki_td_screen_scale(view, 1.0f),
+                rgb, alpha * ((float)pixel[3] / 255.0f));
+        }
+    }
+}
+
+static void test_fractional_resize_equivalence(void)
+{
+    static const uint8_t pixels[] = {
+        240,  20,  40, 255,   30, 220,  70, 128,
+         10,  30, 250,   7,  250, 190,  20, 192
+    };
+    ki_td_soft_renderer optimized = {0};
+    ki_td_soft_renderer reference = {0};
+    ki_td_rgba8 image = ki_td_rgba8_make(pixels, 2, 2);
+    ki_td_view view = {
+        .logical_width = 12,
+        .logical_height = 10,
+        .scale = 1.5f,
+        .origin_x = 1,
+        .origin_y = 2,
+        .offset_x = -1,
+        .offset_y = 1
+    };
+    EXPECT(ki_td_soft_renderer_init(&optimized, 24, 22));
+    EXPECT(ki_td_soft_renderer_init(&reference, 24, 22));
+    ki_td_soft_clear(&optimized, UINT32_C(0x172033));
+    ki_td_soft_clear(&reference, UINT32_C(0x172033));
+    ki_td_soft_rgba_resized(
+        &optimized, &view, 0.25f, 0.75f, &image, 5, 4, 1.0f);
+    reference_fractional_resize(
+        &reference, &view, 0.25f, 0.75f, &image, 5, 4, 1.0f);
+    ki_td_soft_rgba_resized(
+        &optimized, &view, 2.5f, 3.25f, &image, 4, 5, 0.63f);
+    reference_fractional_resize(
+        &reference, &view, 2.5f, 3.25f, &image, 4, 5, 0.63f);
+    EXPECT(memcmp(
+        optimized.canvas.px, reference.canvas.px,
+        (size_t)optimized.canvas.w *
+        (size_t)optimized.canvas.h * sizeof optimized.canvas.px[0]) == 0);
+    ki_td_soft_renderer_destroy(&reference);
+    ki_td_soft_renderer_destroy(&optimized);
+}
+
 static void test_atlas_and_layers(void)
 {
     static const uint8_t nine_pixels[36] = {
@@ -319,6 +388,7 @@ int main(void)
     test_extreme_numeric_inputs();
     test_renderer_lifetime();
     test_adapter();
+    test_fractional_resize_equivalence();
     test_atlas_and_layers();
     if (failures != 0) {
         fprintf(stderr, "FAIL: %d top-down checks\n", failures);

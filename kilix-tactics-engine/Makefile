@@ -6,7 +6,7 @@
 CC ?= cc
 AR ?= ar
 BUILD_DIR ?= build
-SOFT_RASTER_DIR ?= third_party/soft-raster
+SOFT_RASTER_DIR ?= ../kilix-game-kit/third_party/soft-raster
 
 WARNINGS := -Wall -Wextra -Werror -Wshadow -Wconversion -Wsign-conversion \
 	-Wstrict-prototypes -Wmissing-prototypes -Wpointer-arith -Wcast-qual \

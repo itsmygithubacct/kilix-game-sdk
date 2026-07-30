@@ -1,5 +1,8 @@
 # kilix-story
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-story` is a small, game-rule-free C11 runtime for story state,
 conditions, transactional actions, and bounded dialogue traversal.
 
@@ -28,11 +31,13 @@ make test-clang
 
 ## Use
 
-Add the repository as `third_party/kilix-story`, include its Make fragment,
-and link the story archive before platform libraries:
+Add the SDK, include its path fragment, then link the story archive before
+platform libraries:
 
 ```make
-include third_party/kilix-story/mk/kilix-story.mk
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
+include $(KILIX_GAME_SDK_DIR)/mk/kilix-game-sdk.mk
+include $(KILIX_STORY_ROOT)/mk/kilix-story.mk
 CPPFLAGS += $(KILIX_STORY_CPPFLAGS)
 
 game: $(GAME_OBJECTS) $(KILIX_STORY_LIB)

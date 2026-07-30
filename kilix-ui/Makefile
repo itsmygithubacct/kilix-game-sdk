@@ -2,8 +2,8 @@ PROJECT := kilix-ui
 BUILD_DIR ?= build
 PREFIX ?= /usr/local
 DESTDIR ?=
-KILIX_TOP_DOWN_DIR ?= third_party/kilix-top-down-engine
-SOFT_RASTER_DIR ?= $(KILIX_TOP_DOWN_DIR)/third_party/soft-raster
+KILIX_TOP_DOWN_DIR ?= ../kilix-top-down-engine
+SOFT_RASTER_DIR ?= ../kilix-game-kit/third_party/soft-raster
 
 CC ?= cc
 AR ?= ar

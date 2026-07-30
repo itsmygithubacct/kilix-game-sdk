@@ -1,5 +1,8 @@
 # kilix-game-tools
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-game-tools` centralizes the Python validation and deterministic archive
 primitives shared by Kilix games. It is an authoring/build dependency, never a
 runtime dependency.
@@ -41,12 +44,12 @@ PYTHONPATH=src python3 -m kilix_game_tools validate-graphics \
 Catalog validation additionally needs the pinned `kilix-content/src`
 directory on `PYTHONPATH`.
 
-Games normally pin this repository under `third_party/kilix-game-tools` and
-invoke it with:
+Games normally pin the SDK and invoke this component with:
 
 ```make
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
 KILIX_GAME_TOOLS_PYTHONPATH := \
-	$(abspath third_party/kilix-game-tools/src):\
+	$(abspath $(KILIX_GAME_SDK_DIR)/kilix-game-tools/src):\
 	$(abspath third_party/kilix-content/src)
 ```
 

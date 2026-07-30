@@ -1,5 +1,8 @@
 # kilix-assets
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-assets` is the renderer-independent runtime asset layer for Kilix
 games. It centralizes the work that was otherwise repeated in each game:
 

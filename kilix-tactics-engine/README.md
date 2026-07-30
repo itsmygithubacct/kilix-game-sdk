@@ -1,5 +1,8 @@
 # kilix-tactics-engine
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-tactics-engine` is a deterministic C11 library for isometric tactical
 space: stacked cell grids, projection with rotation and cutaway, inverse
 picking, pathfinding, line of sight, cover, and stable draw ordering. It is
@@ -33,13 +36,15 @@ supplied through `SOFT_RASTER_DIR`.
 
 ## Use from a Kilix game
 
-Pin this repository under `third_party/` and include its Make fragment after
-game-kit's, so game-kit's exported `SOFT_RASTER_DIR` selects the rasterizer
-and the adapter never compiles a second copy:
+Pin the SDK and include the component Make fragments after the SDK path
+fragment. Game-kit’s exported `SOFT_RASTER_DIR` selects the rasterizer so the
+adapter never compiles a second copy:
 
 ```make
-include third_party/kilix-game-kit/mk/game-kit.mk
-include third_party/kilix-tactics-engine/mk/kilix-tactics.mk
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
+include $(KILIX_GAME_SDK_DIR)/mk/kilix-game-sdk.mk
+include $(KILIX_GAME_KIT_DIR)/mk/game-kit.mk
+include $(KILIX_TACTICS_DIR)/mk/kilix-tactics.mk
 
 CPPFLAGS += $(KILIX_GAME_KIT_CPPFLAGS) $(KILIX_TACTICS_CPPFLAGS)
 

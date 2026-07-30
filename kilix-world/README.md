@@ -1,5 +1,8 @@
 # kilix-world
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-world` is a projection-independent C11 spatial core for Kilix games.
 It provides immutable map records and allocation-free queries while leaving
 rendering, game rules, mutable actor state, and content schemas to each game.

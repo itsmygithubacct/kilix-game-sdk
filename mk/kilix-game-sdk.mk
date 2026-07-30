@@ -1,0 +1,16 @@
+ifndef KILIX_GAME_SDK_MK_INCLUDED
+KILIX_GAME_SDK_MK_INCLUDED := 1
+
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
+KILIX_GAME_SDK_ROOT := $(abspath $(KILIX_GAME_SDK_DIR))
+
+KILIX_GAME_KIT_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-game-kit
+KILIX_ASSETS_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-assets
+KILIX_GAME_TOOLS_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-game-tools
+KILIX_STORY_ROOT ?= $(KILIX_GAME_SDK_ROOT)/kilix-story
+KILIX_TACTICS_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-tactics-engine
+KILIX_TOP_DOWN_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-top-down-engine
+KILIX_UI_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-ui
+KILIX_WORLD_ROOT ?= $(KILIX_GAME_SDK_ROOT)/kilix-world
+
+endif

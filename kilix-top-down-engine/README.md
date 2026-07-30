@@ -1,5 +1,8 @@
 # kilix-top-down-engine
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-top-down-engine` is a reusable C11 orthographic renderer for Kilix
 games. It provides deterministic logical viewport fitting, frame-derived
 camera shake, an owned software framebuffer, world-space primitives, and
@@ -18,7 +21,6 @@ while keeping their own maps, actors, combat, UI, and visual style.
 ## Build and verify
 
 ```sh
-git submodule update --init --recursive
 make
 make test
 make sanitize
@@ -43,12 +45,11 @@ The headless example writes a deterministic PPM:
 
 ## Use from a Kilix game
 
-A game normally checks out both shared projects directly:
+A game checks out the SDK once:
 
 ```text
 third_party/
-  kilix-game-kit/
-  kilix-top-down-engine/
+  kilix-game-sdk/
 ```
 
 Include game-kit first. Its `SOFT_RASTER_DIR` then causes the top-down adapter
@@ -56,11 +57,10 @@ to compile against the same pinned rasterizer that game-kit archives, avoiding
 duplicate implementations:
 
 ```make
-KILIX_GAME_KIT_DIR ?= third_party/kilix-game-kit
-KILIX_GAME_KIT_ROOT := $(abspath $(KILIX_GAME_KIT_DIR))
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
+include $(KILIX_GAME_SDK_DIR)/mk/kilix-game-sdk.mk
 include $(KILIX_GAME_KIT_DIR)/mk/game-kit.mk
 
-KILIX_TOP_DOWN_DIR ?= third_party/kilix-top-down-engine
 include $(KILIX_TOP_DOWN_DIR)/mk/kilix-top-down.mk
 
 CPPFLAGS += $(KILIX_GAME_KIT_CPPFLAGS) $(KILIX_TD_CPPFLAGS)

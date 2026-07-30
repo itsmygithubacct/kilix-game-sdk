@@ -1,5 +1,8 @@
 # kilix-game-kit
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-game-kit` is the thin integration layer for C games and apps running
 under Kilix, Pleb, and Plebian OS. One recursively checked-out submodule pins
 and builds the shared terminal, input, software-rendering, audio, and state
@@ -27,8 +30,8 @@ zero-padding checks.
 
 ```sh
 git clone --recurse-submodules \
-  https://github.com/itsmygithubacct/kilix-game-kit.git
-cd kilix-game-kit
+  https://github.com/itsmygithubacct/kilix-game-sdk.git
+cd kilix-game-sdk/kilix-game-kit
 make test
 make sanitize
 make test-deps
@@ -40,11 +43,13 @@ ordinary reviewed submodule commits.
 
 ## Consume from a game
 
-Add this repository as `third_party/kilix-game-kit`, initialize recursively,
-then include its Make fragment:
+Add the SDK as `third_party/kilix-game-sdk`, include its path fragment, then
+include game-kit’s Make fragment:
 
 ```make
-include third_party/kilix-game-kit/mk/game-kit.mk
+KILIX_GAME_SDK_DIR ?= third_party/kilix-game-sdk
+include $(KILIX_GAME_SDK_DIR)/mk/kilix-game-sdk.mk
+include $(KILIX_GAME_KIT_DIR)/mk/game-kit.mk
 CPPFLAGS += $(KILIX_GAME_KIT_CPPFLAGS)
 
 game: $(GAME_OBJECTS) $(KILIX_GAME_KIT_LIB)

@@ -1,0 +1,12 @@
+[submodule "kilix-game-kit/third_party/kitty-terminal-session"]
+	path = kilix-game-kit/third_party/kitty-terminal-session
+	url = https://github.com/itsmygithubacct/kitty-terminal-session.git
+[submodule "kilix-game-kit/third_party/soft-raster"]
+	path = kilix-game-kit/third_party/soft-raster
+	url = https://github.com/itsmygithubacct/soft-raster.git
+[submodule "kilix-game-kit/third_party/pcm-mixer"]
+	path = kilix-game-kit/third_party/pcm-mixer
+	url = https://github.com/itsmygithubacct/pcm-mixer.git
+[submodule "kilix-game-kit/third_party/kilix-state"]
+	path = kilix-game-kit/third_party/kilix-state
+	url = https://github.com/itsmygithubacct/kilix-state.git

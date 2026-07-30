@@ -2,7 +2,7 @@ PROJECT := kilix-top-down
 BUILD_DIR ?= build
 PREFIX ?= /usr/local
 DESTDIR ?=
-SOFT_RASTER_DIR ?= third_party/soft-raster
+SOFT_RASTER_DIR ?= ../kilix-game-kit/third_party/soft-raster
 KILIX_GAME_KIT_ROOT ?= ../kilix-game-kit
 
 CC ?= cc
@@ -118,7 +118,7 @@ test-integration:
 endif
 
 test-headers:
-	tests/test_headers.sh
+	SOFT_RASTER_DIR="$(abspath $(SOFT_RASTER_DIR))" tests/test_headers.sh
 
 $(PKG_CONFIG_FILE): kilix-top-down-engine.pc.in Makefile FORCE
 	mkdir -p $(@D)
@@ -135,7 +135,7 @@ install: $(LIBS) $(PKG_CONFIG_FILE)
 		$(DESTDIR)$(PREFIX)/lib/pkgconfig/kilix-top-down-engine.pc
 
 test-install: $(LIBS) $(PKG_CONFIG_FILE)
-	tests/test_install.sh
+	SOFT_RASTER_DIR="$(abspath $(SOFT_RASTER_DIR))" tests/test_install.sh
 
 sanitize:
 	mkdir -p $(BUILD_DIR)

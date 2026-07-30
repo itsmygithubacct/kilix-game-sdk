@@ -1,5 +1,8 @@
 # kilix-ui
 
+This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
+not this directory as a separate repository.
+
 `kilix-ui` is the reusable, game-rule-free interface layer for Kilix games.
 It builds on `kilix-top-down-engine` and provides:
 
@@ -23,17 +26,15 @@ duplicated panel layout and focus presentation.
 ## Build and verify
 
 ```sh
-git submodule update --init --recursive
 make
 make test
 make sanitize
 ```
 
-The recursive checkout pins `kilix-top-down-engine` and its raster dependency.
-Set `KILIX_TOP_DOWN_DIR` only when deliberately sharing another checked-out
-renderer. The reusable Make fragment forwards that renderer and its raster
-root into the recursive UI build and tracks every public renderer header, so
-the UI cannot silently compile against its nested fallback checkout.
+The SDK supplies `kilix-top-down-engine` and game-kit’s raster dependency.
+The reusable Make fragment forwards those shared roots into the UI build and
+tracks every public renderer header, so the UI cannot silently compile against
+a different renderer checkout.
 Applications normally link in this order:
 
 ```text
@@ -46,7 +47,7 @@ libkilix-game-kit.a
 ```
 
 `kilix-game-kit` supplies the one `soft-raster` implementation in that common
-layout. Standalone UI tests link the renderer's pinned rasterizer directly.
+layout. Standalone UI tests link that same SDK checkout directly.
 
 ## License
 

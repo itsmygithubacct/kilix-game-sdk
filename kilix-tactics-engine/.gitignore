@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/third_party/
+*.o
+*.a
+*.so
+*.ppm
+__pycache__/
+*.pyc

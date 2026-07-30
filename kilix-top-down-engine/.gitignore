@@ -1,0 +1,9 @@
+/build/
+*.o
+*.a
+*.so
+*.dylib
+*.ppm
+__pycache__/
+*.pyc
+.venv/

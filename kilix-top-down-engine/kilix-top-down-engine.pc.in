@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: kilix-top-down-engine
+Description: Deterministic orthographic renderer for Kilix games
+Version: 0.3.1
+Libs: -L${libdir} -lkilix-top-down-soft -lkilix-top-down-core
+Libs.private: -lsoft-raster -lm
+Cflags: -I${includedir}

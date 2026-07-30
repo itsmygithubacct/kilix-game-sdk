@@ -17,10 +17,20 @@ static void request_stop_signal(int signal_number)
     scope->stop_requested = 1;
 }
 
+static void request_suspend_signal(int signal_number)
+{
+    kilix_game_signal_scope *scope = active_signal_scope;
+
+    (void)signal_number;
+    if (!scope) return;
+    scope->suspend_requested = 1;
+}
+
 bool kilix_game_signals_install(kilix_game_signal_scope *scope)
 {
     struct sigaction action;
     struct sigaction ignore;
+    struct sigaction suspend;
     size_t installed = 0u;
     if (!scope || active_signal_scope) {
         errno = EBUSY;
@@ -45,9 +55,19 @@ bool kilix_game_signals_install(kilix_game_signal_scope *scope)
         sigaction(SIGPIPE, &ignore, &scope->previous_pipe) != 0)
         goto rollback;
     scope->pipe_installed = true;
+    memset(&suspend, 0, sizeof suspend);
+    suspend.sa_handler = request_suspend_signal;
+    if (sigemptyset(&suspend.sa_mask) != 0 ||
+        sigaction(SIGTSTP, &suspend, &scope->previous_suspend) != 0)
+        goto rollback;
+    scope->suspend_installed = true;
     scope->installed = true;
     return true;
 rollback:
+    if (scope->suspend_installed)
+        (void)sigaction(SIGTSTP, &scope->previous_suspend, NULL);
+    if (scope->pipe_installed)
+        (void)sigaction(SIGPIPE, &scope->previous_pipe, NULL);
     while (installed > 0u) {
         --installed;
         (void)sigaction(handled_signals[installed],
@@ -63,6 +83,8 @@ void kilix_game_signals_restore(kilix_game_signal_scope *scope)
     size_t index;
     if (!scope || !scope->installed) return;
     if (active_signal_scope == scope) active_signal_scope = NULL;
+    if (scope->suspend_installed)
+        (void)sigaction(SIGTSTP, &scope->previous_suspend, NULL);
     if (scope->pipe_installed)
         (void)sigaction(SIGPIPE, &scope->previous_pipe, NULL);
     for (index = 0u; index < 4u; ++index)
@@ -73,6 +95,12 @@ void kilix_game_signals_restore(kilix_game_signal_scope *scope)
 bool kilix_game_signals_requested(const kilix_game_signal_scope *scope)
 {
     return scope && scope->stop_requested != 0;
+}
+
+bool kilix_game_signals_suspend_requested(
+    const kilix_game_signal_scope *scope)
+{
+    return scope && scope->suspend_requested != 0;
 }
 
 int kilix_game_signals_number(const kilix_game_signal_scope *scope)
@@ -164,6 +192,33 @@ int kilix_game_host_run(kilix_game_host *host,
            !kilix_game_signals_requested(&host->signals)) {
         kilix_game_frame frame;
         uint32_t step;
+        if (kilix_game_signals_suspend_requested(&host->signals)) {
+            host->signals.suspend_requested = 0;
+            if (host->terminal_started) {
+                kittyts_suspend(&host->terminal);
+                host->terminal_started = false;
+            }
+            if (raise(SIGSTOP) != 0) {
+                failed = true;
+                break;
+            }
+            ++host->suspension_count;
+            if (!selected->headless) {
+                if (kittyts_start(
+                        &host->terminal, selected->input_fd,
+                        selected->output_fd, &selected->terminal) != 0) {
+                    failed = true;
+                    break;
+                }
+                host->terminal_started = true;
+            }
+            now = kilix_game_monotonic_ns();
+            if (now < 0) {
+                failed = true;
+                break;
+            }
+            kilix_game_clock_reset(&host->clock, now);
+        }
         if (!selected->headless) {
             kittyin_event event;
             if (kittyts_read_input(&host->terminal) < 0) {
@@ -210,7 +265,8 @@ int kilix_game_host_run(kilix_game_host *host,
 done:
     host->running = false;
     if (callback_started && callbacks->stop) callbacks->stop(host, user);
-    if (host->terminal_started) {
+    if (host->terminal_started ||
+        host->terminal.framebuffer_suspended) {
         kittyts_stop(&host->terminal);
         host->terminal_started = false;
     }

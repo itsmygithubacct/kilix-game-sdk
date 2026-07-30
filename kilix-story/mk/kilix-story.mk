@@ -1,0 +1,13 @@
+ifndef KILIX_STORY_ROOT
+KILIX_STORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+endif
+KILIX_STORY_BUILD_DIR ?= $(KILIX_STORY_ROOT)/build
+KILIX_STORY_LIB := $(KILIX_STORY_BUILD_DIR)/libkilix-story.a
+KILIX_STORY_CPPFLAGS := -I$(KILIX_STORY_ROOT)/include
+
+$(KILIX_STORY_LIB): \
+		$(KILIX_STORY_ROOT)/Makefile \
+		$(KILIX_STORY_ROOT)/include/kilix_story.h \
+		$(KILIX_STORY_ROOT)/src/kilix_story.c
+	$(MAKE) -C $(KILIX_STORY_ROOT) \
+		BUILD_DIR=$(KILIX_STORY_BUILD_DIR) $(KILIX_STORY_LIB)

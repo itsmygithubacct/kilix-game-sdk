@@ -116,6 +116,7 @@ $(TEST_BIN): tests/test_game_kit.c $(LIB) $(TEST_LIB) | $(BUILD_DIR)
 
 test: $(TEST_BIN)
 	$(TEST_BIN)
+	$(MAKE) -f tests/test_make_fragment.mk check-root
 	tools/check-submodules.sh
 
 test-deps:

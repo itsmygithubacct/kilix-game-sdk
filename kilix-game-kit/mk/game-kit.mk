@@ -1,7 +1,9 @@
 # Include this file from a game Makefile after adding kilix-game-kit as a
 # recursive submodule. Consumers link one archive and keep their own targets.
 
-KILIX_GAME_KIT_ROOT ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+ifndef KILIX_GAME_KIT_ROOT
+KILIX_GAME_KIT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+endif
 KILIX_GAME_KIT_BUILD_DIR ?= $(KILIX_GAME_KIT_ROOT)/build
 KILIX_GAME_KIT_LIB := $(KILIX_GAME_KIT_BUILD_DIR)/libkilix-game-kit.a
 

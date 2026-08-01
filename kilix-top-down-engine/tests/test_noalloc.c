@@ -82,6 +82,8 @@ int main(void)
         ki_td_soft_fill_circle(&renderer, &view, 20, 20, 6,
                                0xffd166, 1.0f);
         ki_td_soft_rgba_pixel_art(&renderer, &view, 10, 12, &sprite, 1.0f);
+        ki_td_soft_rgba_tinted(&renderer, &view, 16, 12, &sprite, 4, 4,
+                               UINT32_C(0x80ff80), 0.75f);
         ki_td_soft_nine_slice(&renderer, &view, 40, 4, 12, 8, &slice, 1.0f);
         ki_td_soft_tile_batch(&renderer, &view, &batch);
         ki_td_soft_sprite_layers(&renderer, &view, commands, 2u, order, 2u);

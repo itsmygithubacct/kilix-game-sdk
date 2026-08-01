@@ -556,10 +556,24 @@ void ki_td_soft_rgba(ki_td_soft_renderer *renderer, const ki_td_view *view,
                                   image_pixel(image, xx, yy), alpha);
 }
 
-void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
-                             const ki_td_view *view, float x, float y,
-                             const ki_td_rgba8 *image, int width, int height,
-                             float alpha)
+static void modulate_rgba_pixel(const uint8_t *pixel, uint32_t tint_rgb,
+                                uint8_t *result)
+{
+    result[0] = (uint8_t)(
+        (uint32_t)pixel[0] * ((tint_rgb >> 16) & UINT32_C(255)) /
+        UINT32_C(255));
+    result[1] = (uint8_t)(
+        (uint32_t)pixel[1] * ((tint_rgb >> 8) & UINT32_C(255)) /
+        UINT32_C(255));
+    result[2] = (uint8_t)(
+        (uint32_t)pixel[2] * (tint_rgb & UINT32_C(255)) / UINT32_C(255));
+    result[3] = pixel[3];
+}
+
+static void draw_rgba_resized(ki_td_soft_renderer *renderer,
+                              const ki_td_view *view, float x, float y,
+                              const ki_td_rgba8 *image, int width, int height,
+                              uint32_t tint_rgb, float alpha)
 {
     int integer_scale;
     int scaled_span;
@@ -579,13 +593,15 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
             int64_t bottom = top + integer_scale;
             for (int xx = 0; xx < width; xx++) {
                 const uint8_t *pixel;
+                uint8_t tinted_pixel[4];
                 int source_x = xx * image->width / width;
                 int64_t left =
                     (int64_t)origin_x + (int64_t)xx * integer_scale;
                 int64_t right = left + integer_scale;
                 pixel = image_pixel(image, source_x, source_y);
+                modulate_rgba_pixel(pixel, tint_rgb, tinted_pixel);
                 blend_rgba_integer_block(
-                    renderer, left, top, right, bottom, pixel, alpha);
+                    renderer, left, top, right, bottom, tinted_pixel, alpha);
             }
         }
         return;
@@ -597,13 +613,35 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
         int source_y = yy * image->height / height;
         int top = ki_td_screen_y(view, y + (float)yy);
         for (int xx = 0; xx < width; xx++) {
+            const uint8_t *pixel;
+            uint8_t tinted_pixel[4];
             int source_x = xx * image->width / width;
             int left = ki_td_screen_x(view, x + (float)xx);
+            pixel = image_pixel(image, source_x, source_y);
+            modulate_rgba_pixel(pixel, tint_rgb, tinted_pixel);
             blend_rgba_scaled_block(
                 renderer, left, top, scaled_span, edge_coverage,
-                image_pixel(image, source_x, source_y), alpha);
+                tinted_pixel, alpha);
         }
     }
+}
+
+void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
+                             const ki_td_view *view, float x, float y,
+                             const ki_td_rgba8 *image, int width, int height,
+                             float alpha)
+{
+    draw_rgba_resized(renderer, view, x, y, image, width, height,
+                      UINT32_C(0xffffff), alpha);
+}
+
+void ki_td_soft_rgba_tinted(ki_td_soft_renderer *renderer,
+                            const ki_td_view *view, float x, float y,
+                            const ki_td_rgba8 *image, int width, int height,
+                            uint32_t tint_rgb, float alpha)
+{
+    draw_rgba_resized(renderer, view, x, y, image, width, height, tint_rgb,
+                      alpha);
 }
 
 void ki_td_soft_rgba_rotated(ki_td_soft_renderer *renderer,

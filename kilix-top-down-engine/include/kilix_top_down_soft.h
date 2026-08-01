@@ -138,6 +138,11 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
                              const ki_td_view *view, float x, float y,
                              const ki_td_rgba8 *image, int width, int height,
                              float alpha);
+/* Draws a resized RGBA8 image with its RGB modulated by 0xRRGGBB. */
+void ki_td_soft_rgba_tinted(ki_td_soft_renderer *renderer,
+                            const ki_td_view *view, float x, float y,
+                            const ki_td_rgba8 *image, int width, int height,
+                            uint32_t tint_rgb, float alpha);
 void ki_td_soft_rgba_rotated(ki_td_soft_renderer *renderer,
                              const ki_td_view *view, float x, float y,
                              const ki_td_rgba8 *image, int quarter_turns,

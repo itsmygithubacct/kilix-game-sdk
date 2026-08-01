@@ -6,4 +6,5 @@
 - Add configurable viewport fitting and deterministic camera shake.
 - Add a `soft-raster` adapter for framebuffer lifecycle, primitives, and
   straight-alpha RGBA pixel art.
+- Add color-modulated resized RGBA sprite blits.
 - Add standalone, sanitizer, header, install, and game-kit integration gates.

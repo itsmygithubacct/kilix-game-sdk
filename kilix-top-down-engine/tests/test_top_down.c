@@ -321,6 +321,82 @@ static void test_fractional_resize_equivalence(void)
     ki_td_soft_renderer_destroy(&optimized);
 }
 
+static void test_tinted_resize(void)
+{
+    static const uint8_t pixels[] = {
+        200, 160, 120, 255,   30, 220,  70, 128,
+         10,  30, 250,   7,  250, 190,  20, 192
+    };
+    ki_td_soft_renderer resized = {0};
+    ki_td_soft_renderer tinted = {0};
+    ki_td_soft_renderer unready = {0};
+    ki_td_rgba8 image = ki_td_rgba8_make(pixels, 2, 2);
+    ki_td_rgba8 invalid = image;
+    ki_td_view view = {
+        .scale = 2.0f,
+        .origin_x = 1,
+        .origin_y = 2
+    };
+    uint32_t unchanged[24 * 22];
+    size_t canvas_size = sizeof unchanged;
+    uint8_t *rgba;
+    size_t offset;
+    invalid.stride = 3u;
+    EXPECT(ki_td_soft_renderer_init(&resized, 24, 22));
+    EXPECT(ki_td_soft_renderer_init(&tinted, 24, 22));
+    ki_td_soft_clear(&resized, UINT32_C(0x172033));
+    ki_td_soft_clear(&tinted, UINT32_C(0x172033));
+    ki_td_soft_rgba_resized(
+        &resized, &view, 0.25f, 0.75f, &image, 5, 4, 0.63f);
+    ki_td_soft_rgba_tinted(
+        &tinted, &view, 0.25f, 0.75f, &image, 5, 4,
+        UINT32_C(0xffffff), 0.63f);
+    view.scale = 1.5f;
+    ki_td_soft_rgba_resized(
+        &resized, &view, 2.5f, 3.25f, &image, 4, 5, 1.0f);
+    ki_td_soft_rgba_tinted(
+        &tinted, &view, 2.5f, 3.25f, &image, 4, 5,
+        UINT32_C(0xffffff), 1.0f);
+    EXPECT(memcmp(resized.canvas.px, tinted.canvas.px, canvas_size) == 0);
+
+    view = (ki_td_view){.scale = 1.0f};
+    ki_td_soft_clear(&tinted, UINT32_C(0x172033));
+    ki_td_soft_rgba_tinted(
+        &tinted, &view, 1.0f, 1.0f, &image, 1, 1,
+        UINT32_C(0x40c020), 1.0f);
+    rgba = ki_td_soft_pack_rgba(&tinted);
+    EXPECT(rgba != NULL);
+    offset = ((size_t)tinted.canvas.w + 1u) * 4u;
+    EXPECT(rgba[offset] == 50u);
+    EXPECT(rgba[offset + 1u] == 120u);
+    EXPECT(rgba[offset + 2u] == 15u);
+    EXPECT(rgba[offset + 3u] == 255u);
+
+    ki_td_soft_clear(&tinted, UINT32_C(0x314159));
+    memcpy(unchanged, tinted.canvas.px, canvas_size);
+    ki_td_soft_rgba_tinted(NULL, &view, 0.0f, 0.0f, &image, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&unready, &view, 0.0f, 0.0f, &image, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, NULL, 0.0f, 0.0f, &image, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, 0.0f, 0.0f, NULL, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, 0.0f, 0.0f, &invalid, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, 0.0f, 0.0f, &image, 0, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, 0.0f, 0.0f, &image, 2, INT_MIN,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, -1000.0f, -1000.0f, &image, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    ki_td_soft_rgba_tinted(&tinted, &view, 1000.0f, 1000.0f, &image, 2, 2,
+                           UINT32_C(0xffffff), 1.0f);
+    EXPECT(memcmp(unchanged, tinted.canvas.px, canvas_size) == 0);
+    ki_td_soft_renderer_destroy(&tinted);
+    ki_td_soft_renderer_destroy(&resized);
+}
+
 static void test_atlas_and_layers(void)
 {
     static const uint8_t nine_pixels[36] = {
@@ -389,6 +465,7 @@ int main(void)
     test_renderer_lifetime();
     test_adapter();
     test_fractional_resize_equivalence();
+    test_tinted_resize();
     test_atlas_and_layers();
     if (failures != 0) {
         fprintf(stderr, "FAIL: %d top-down checks\n", failures);

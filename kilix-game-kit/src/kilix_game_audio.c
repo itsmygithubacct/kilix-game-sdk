@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define KILIX_GAME_AUDIO_PATH_CAPACITY 4096u
 #define SET_ERROR(destination, destination_size, ...) do {                   \
@@ -19,6 +20,66 @@ void kilix_game_data_roots_init(kilix_game_data_roots *roots)
     roots->environment_variable = NULL;
     roots->local_root = ".";
     roots->installed_root = NULL;
+}
+
+bool kilix_game_data_root_from_executable(const char *environment_variable,
+                                          const char *local_subdir,
+                                          const char *installed_subdir,
+                                          char *destination,
+                                          size_t destination_size)
+{
+    char executable[KILIX_GAME_AUDIO_PATH_CAPACITY / 4u];
+    char candidate[KILIX_GAME_AUDIO_PATH_CAPACITY / 2u];
+    struct stat status;
+    ssize_t length;
+    char *slash;
+    int written;
+
+    if (!destination || destination_size == 0u || !local_subdir ||
+        local_subdir[0] == '\0') return false;
+    /* An explicit override wins unconditionally, existing or not, so a
+     * misspelled path fails loudly instead of silently falling back. */
+    if (environment_variable && environment_variable[0] != '\0') {
+        const char *override = getenv(environment_variable);
+        if (override && override[0] != '\0') {
+            written = snprintf(destination, destination_size, "%s", override);
+            return written >= 0 && (size_t)written < destination_size;
+        }
+    }
+    /* Resolve relative to the running executable so the game finds its data
+     * from any working directory: <exe_dir>/<local_subdir> for a build tree,
+     * then <exe_dir>/<installed_subdir> for an installed layout. */
+    length = readlink("/proc/self/exe", executable, sizeof executable - 1u);
+    if (length > 0) {
+        executable[length] = '\0';
+        slash = strrchr(executable, '/');
+        if (slash) {
+            *slash = '\0';
+            written = snprintf(candidate, sizeof candidate, "%s/%s",
+                               executable, local_subdir);
+            if (written >= 0 && (size_t)written < sizeof candidate &&
+                stat(candidate, &status) == 0 && S_ISDIR(status.st_mode) &&
+                (size_t)written < destination_size) {
+                memcpy(destination, candidate, (size_t)written + 1u);
+                return true;
+            }
+            if (installed_subdir && installed_subdir[0] != '\0') {
+                written = snprintf(candidate, sizeof candidate, "%s/%s",
+                                   executable, installed_subdir);
+                if (written >= 0 && (size_t)written < sizeof candidate &&
+                    stat(candidate, &status) == 0 &&
+                    S_ISDIR(status.st_mode) &&
+                    (size_t)written < destination_size) {
+                    memcpy(destination, candidate, (size_t)written + 1u);
+                    return true;
+                }
+            }
+        }
+    }
+    /* Last resort: the local subdirectory relative to the current working
+     * directory, the historical default for running from a build tree. */
+    written = snprintf(destination, destination_size, "%s", local_subdir);
+    return written >= 0 && (size_t)written < destination_size;
 }
 
 bool kilix_game_data_path_is_safe(const char *relative_path)

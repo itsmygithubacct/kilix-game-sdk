@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define CHECK(condition)                                                      \
@@ -191,6 +193,80 @@ static bool test_runtime_host_and_signals(void)
     return true;
 }
 
+static bool test_crash_signals(void)
+{
+    kilix_game_signal_scope signals;
+    struct sigaction current;
+    pid_t child;
+    int child_status = 0;
+
+    /* Installing the scope must claim the crash-class signals and restoring
+     * it must hand back the previous dispositions. */
+    CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
+          current.sa_handler == SIG_DFL);
+    CHECK(kilix_game_signals_install(&signals));
+    CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
+          current.sa_handler != SIG_DFL);
+    CHECK(sigaction(SIGFPE, NULL, &current) == 0 &&
+          current.sa_handler != SIG_DFL);
+    kilix_game_signals_restore(&signals);
+    CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
+          current.sa_handler == SIG_DFL);
+
+    /* The handler must re-raise with the default disposition, so a crashing
+     * process still dies with the original signal. No terminal is registered
+     * here; the restore step is a no-op in this child. */
+    child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        if (!kilix_game_signals_install(&signals)) _exit(90);
+        (void)raise(SIGSEGV);
+        _exit(91);   /* unreachable when the handler re-raises correctly */
+    }
+    CHECK(waitpid(child, &child_status, 0) == child);
+    CHECK(WIFSIGNALED(child_status) && WTERMSIG(child_status) == SIGSEGV);
+    return true;
+}
+
+static bool test_data_root_from_executable(void)
+{
+    char root[512];
+    char expected[512];
+    char executable[256];
+    ssize_t length;
+    char *slash;
+
+    /* The environment override wins unconditionally. */
+    CHECK(setenv("KILIX_KIT_TEST_DATA", "/nonexistent/override", 1) == 0);
+    CHECK(kilix_game_data_root_from_executable(
+        "KILIX_KIT_TEST_DATA", "assets", NULL, root, sizeof root));
+    CHECK(strcmp(root, "/nonexistent/override") == 0);
+    CHECK(unsetenv("KILIX_KIT_TEST_DATA") == 0);
+
+    /* A directory beside the executable is found from any cwd. */
+    length = readlink("/proc/self/exe", executable, sizeof executable - 1u);
+    CHECK(length > 0);
+    executable[length] = '\0';
+    slash = strrchr(executable, '/');
+    CHECK(slash != NULL);
+    *slash = '\0';
+    CHECK(snprintf(expected, sizeof expected, "%s/kit-root-probe",
+                   executable) < (int)sizeof expected);
+    (void)rmdir(expected);
+    CHECK(mkdir(expected, 0755) == 0);
+    CHECK(kilix_game_data_root_from_executable(
+        NULL, "kit-root-probe", NULL, root, sizeof root));
+    CHECK(strcmp(root, expected) == 0);
+    CHECK(rmdir(expected) == 0);
+
+    /* With nothing found, the local subdirectory is the cwd-relative
+     * fallback. */
+    CHECK(kilix_game_data_root_from_executable(
+        NULL, "no-such-dir-anywhere", "also-missing", root, sizeof root));
+    CHECK(strcmp(root, "no-such-dir-anywhere") == 0);
+    return true;
+}
+
 static void little16(uint8_t *bytes, uint16_t value)
 {
     bytes[0] = (uint8_t)value;
@@ -317,6 +393,8 @@ int main(void)
         !test_state_codec_embedding() ||
         !test_pty_and_golden_helpers() ||
         !test_runtime_host_and_signals() ||
+        !test_crash_signals() ||
+        !test_data_root_from_executable() ||
         !test_audio_cli_and_golden()) return EXIT_FAILURE;
     (void)puts("ok: kilix-game-kit");
     return EXIT_SUCCESS;

@@ -24,6 +24,18 @@ bool kilix_game_data_resolve(const kilix_game_data_roots *roots,
                              const char *relative_path, char *destination,
                              size_t destination_size);
 
+/* Locate a game's data root once at startup, from any working directory:
+ * $environment_variable wins unconditionally when set; otherwise the first
+ * existing directory of <exe_dir>/<local_subdir> (build tree) then
+ * <exe_dir>/<installed_subdir> (e.g. "../share/<game>/assets"); otherwise
+ * local_subdir itself, relative to the cwd. Always writes a usable root
+ * unless the destination is too small. */
+bool kilix_game_data_root_from_executable(const char *environment_variable,
+                                          const char *local_subdir,
+                                          const char *installed_subdir,
+                                          char *destination,
+                                          size_t destination_size);
+
 typedef enum kilix_game_audio_bus {
     KILIX_GAME_AUDIO_BUS_MASTER = 0,
     KILIX_GAME_AUDIO_BUS_SFX,

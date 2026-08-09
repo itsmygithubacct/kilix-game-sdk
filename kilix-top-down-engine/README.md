@@ -24,6 +24,7 @@ while keeping their own maps, actors, combat, UI, and visual style.
 make
 make test
 make sanitize
+make analyze
 make test-deps
 make test-integration
 make test-headers
@@ -35,7 +36,8 @@ make release-gate
 
 The runtime needs a C11 compiler, Make, `ar`, and the pinned `soft-raster`
 checkout. Drawing is terminal-independent and performs no allocation after a
-renderer has been initialized or resized.
+renderer has been initialized or resized. `BUILD_DIR` may point outside the
+source tree; dependency artifacts remain in `SOFT_RASTER_BUILD_DIR`.
 
 The headless example writes a deterministic PPM:
 
@@ -81,8 +83,15 @@ The soft adapter accepts straight RGBA8 data—the format emitted by
 `kilix-assets`. Alpha values below 8 are transparent, and nearest resizing plus
 quarter-turn rotation preserve pixel-art edges. Borrowed atlas subregions,
 nine-slice panels, row-major tile batches, and caller-buffered stable sprite
-layer ordering all render without allocating. The adapter intentionally does
-not reinterpret these bytes as `soft-raster`'s premultiplied canvas format.
+layer ordering all render without allocating. Large sprite sets use an
+allocation-free O(n log n) ordering path, and image, resized, and tile-batch
+draws restrict work to the active clip. The adapter intentionally does not
+reinterpret these bytes as `soft-raster`'s premultiplied canvas format.
+
+Drawing treats non-finite or unrepresentable geometry as an empty operation.
+Non-positive or non-finite alpha also draws nothing, while alpha above one is
+clamped to opaque. This keeps invalid public inputs out of rasterizer integer
+conversions without changing valid rendering output.
 
 The view API also provides checked screen-to-logical inversion and clipped
 visible-cell bounds. Games can use those helpers with `kilix-world` for

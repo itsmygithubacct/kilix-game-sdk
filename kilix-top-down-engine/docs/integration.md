@@ -11,6 +11,8 @@ the active dimensions is a no-op.
 The canvas stores `0xAARRGGBB` pixels. Call `ki_td_soft_pack_rgba` after drawing
 to obtain stable `R,G,B,A` bytes for a terminal or window presenter. The packed
 pointer belongs to the renderer and remains valid until resize or destroy.
+The canvas accessors return borrowed pointers; callers may narrow the clip
+rectangle but must keep it ordered and within the canvas dimensions.
 
 ## A frame
 
@@ -46,7 +48,9 @@ For an actor pass, assign each `ki_td_sprite_command` a semantic `layer`,
 `sort_y`, and deterministic `order`, then pass caller-owned index scratch to
 `ki_td_soft_sprite_layers`. The engine performs stable ordering without an
 allocation. The game still owns the meanings of layers and the decision about
-which actors enter the pass.
+which actors enter the pass. Scratch must contain at least one `size_t` per
+command and must not overlap the command array. Already ordered input is
+linear, while large unordered passes are O(n log n).
 
 ## Determinism and threading
 
@@ -58,6 +62,12 @@ byte-golden builds with fast-math transformations.
 A renderer and its view are caller-owned and not internally synchronized. One
 thread may own a renderer at a time. Separate renderers may be used on separate
 threads subject to the caller's allocator and presentation rules.
+
+Views, coordinates, dimensions, and alpha are checked before they reach the
+rasterizer. Non-finite or unrepresentable geometry draws nothing; alpha above
+one is clamped to one, and non-finite or non-positive alpha draws nothing.
+Checked APIs leave their outputs unchanged when they fail. The two output
+pointers passed to `ki_td_screen_to_logical` must be distinct.
 
 ## RGBA sprites
 
@@ -75,7 +85,9 @@ dimensions smaller than the combined borders draw nothing.
 The logical sprite functions draw each source pixel as one logical unit. The
 pixel-art fast path writes integer-sized blocks when the view scale is within
 0.01 of the nearest positive integer; otherwise it uses the general logical
-path. All paths clip through `soft-raster`.
+path. Image, resized, and tile-batch paths derive their source range from the
+active canvas clip, so fully offscreen content is skipped. All paths clip
+through `soft-raster`.
 
 ## Shared library linkage
 

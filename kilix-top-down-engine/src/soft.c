@@ -1,5 +1,6 @@
 #include "kilix_top_down_soft.h"
 #include "kilix_top_down_view.h"
+#include "internal.h"
 
 #include <limits.h>
 #include <math.h>
@@ -7,8 +8,72 @@
 
 static bool renderer_is_ready(const ki_td_soft_renderer *renderer)
 {
-    return renderer && renderer->canvas.px && renderer->rgba &&
-           renderer->width > 0 && renderer->height > 0;
+    size_t pixel_count;
+    const sr_canvas *canvas;
+    if (!renderer || !renderer->canvas.px || !renderer->rgba ||
+        renderer->width <= 0 || renderer->height <= 0 ||
+        (size_t)renderer->width >
+            SIZE_MAX / (size_t)renderer->height)
+        return false;
+    canvas = &renderer->canvas;
+    pixel_count = (size_t)renderer->width * (size_t)renderer->height;
+    return pixel_count <= SIZE_MAX / 4u &&
+           renderer->rgba_size >= pixel_count * 4u &&
+           canvas->w == renderer->width && canvas->h == renderer->height &&
+           canvas->clip_x0 >= 0 && canvas->clip_x0 <= canvas->clip_x1 &&
+           canvas->clip_x1 <= canvas->w && canvas->clip_y0 >= 0 &&
+           canvas->clip_y0 <= canvas->clip_y1 &&
+           canvas->clip_y1 <= canvas->h;
+}
+
+static bool normalized_alpha(float alpha, float *result)
+{
+    if (!result || !isfinite(alpha) || alpha <= 0.0f) return false;
+    *result = alpha > 1.0f ? 1.0f : alpha;
+    return true;
+}
+
+static bool int_edge(double value)
+{
+    return isfinite(value) && value >= (double)INT_MIN &&
+           value <= (double)INT_MAX;
+}
+
+static bool rect_geometry(float x, float y, float width, float height)
+{
+    return isfinite(x) && isfinite(y) && isfinite(width) &&
+           isfinite(height) && width > 0.0f && height > 0.0f &&
+           int_edge((double)x) && int_edge((double)y) &&
+           int_edge((double)x + width) && int_edge((double)y + height);
+}
+
+static bool ellipse_geometry(float x, float y, float radius_x,
+                             float radius_y)
+{
+    return isfinite(x) && isfinite(y) && isfinite(radius_x) &&
+           isfinite(radius_y) && radius_x > 0.0f && radius_y > 0.0f &&
+           int_edge((double)x - radius_x) &&
+           int_edge((double)x + radius_x) &&
+           int_edge((double)y - radius_y) &&
+           int_edge((double)y + radius_y);
+}
+
+static bool line_geometry(float x0, float y0, float x1, float y1,
+                          float width)
+{
+    double radius;
+    if (!isfinite(x0) || !isfinite(y0) || !isfinite(x1) || !isfinite(y1) ||
+        !isfinite(width) || width <= 0.0f)
+        return false;
+    radius = (double)width * 0.5 + 1.0;
+    return int_edge((double)x0 - radius) &&
+           int_edge((double)x0 + radius) &&
+           int_edge((double)y0 - radius) &&
+           int_edge((double)y0 + radius) &&
+           int_edge((double)x1 - radius) &&
+           int_edge((double)x1 + radius) &&
+           int_edge((double)y1 - radius) &&
+           int_edge((double)y1 + radius);
 }
 
 ki_td_rgba8 ki_td_rgba8_make(const void *pixels, int width, int height)
@@ -74,6 +139,8 @@ bool ki_td_tile_batch_is_valid(const ki_td_tile_batch *batch)
         batch->tile_width <= 0 || batch->tile_height <= 0 ||
         !isfinite(batch->x) || !isfinite(batch->y) ||
         !isfinite(batch->alpha) || batch->alpha <= 0.0f ||
+        batch->columns > (uint32_t)INT_MAX ||
+        batch->rows > (uint32_t)INT_MAX ||
         batch->atlas_columns > (uint32_t)INT_MAX ||
         batch->atlas_rows > (uint32_t)INT_MAX ||
         batch->atlas->width % (int)batch->atlas_columns != 0 ||
@@ -96,23 +163,86 @@ static int sprite_compare(const ki_td_sprite_command *commands,
     return first < second ? -1 : first > second ? 1 : 0;
 }
 
+static bool byte_ranges_overlap(const void *first, size_t first_size,
+                                const void *second, size_t second_size)
+{
+    uintptr_t first_start = (uintptr_t)first;
+    uintptr_t second_start = (uintptr_t)second;
+    uintptr_t first_end;
+    uintptr_t second_end;
+    if (first_size == 0u || second_size == 0u) return false;
+    if (first_size > UINTPTR_MAX - first_start ||
+        second_size > UINTPTR_MAX - second_start)
+        return true;
+    first_end = first_start + first_size;
+    second_end = second_start + second_size;
+    return first_start < second_end && second_start < first_end;
+}
+
+static void sprite_sift_down(const ki_td_sprite_command *commands,
+                             size_t *scratch, size_t root, size_t count)
+{
+    for (;;) {
+        size_t child;
+        size_t greater;
+        if (root >= count / 2u) return;
+        child = root * 2u + 1u;
+        greater = child;
+        if (child + 1u < count &&
+            sprite_compare(commands, scratch[child],
+                           scratch[child + 1u]) < 0)
+            greater = child + 1u;
+        if (sprite_compare(commands, scratch[root], scratch[greater]) >= 0)
+            return;
+        {
+            size_t swap = scratch[root];
+            scratch[root] = scratch[greater];
+            scratch[greater] = swap;
+        }
+        root = greater;
+    }
+}
+
 size_t ki_td_sprite_order(const ki_td_sprite_command *commands, size_t count,
                           size_t *scratch, size_t scratch_count)
 {
     size_t index;
+    bool ordered = true;
     if (count == 0u) return 0u;
-    if (!commands || !scratch || scratch_count < count) return 0u;
+    if (!commands || !scratch || scratch_count < count ||
+        count > SIZE_MAX / sizeof commands[0] ||
+        count > SIZE_MAX / sizeof scratch[0] ||
+        byte_ranges_overlap(commands, count * sizeof commands[0],
+                            scratch, count * sizeof scratch[0]))
+        return 0u;
     for (index = 0u; index < count; ++index) {
-        size_t cursor = index;
         scratch[index] = index;
-        while (cursor > 0u &&
-               sprite_compare(commands, scratch[cursor],
-                              scratch[cursor - 1u]) < 0) {
-            size_t swap = scratch[cursor];
-            scratch[cursor] = scratch[cursor - 1u];
-            scratch[cursor - 1u] = swap;
-            --cursor;
+        if (index != 0u &&
+            sprite_compare(commands, index - 1u, index) > 0)
+            ordered = false;
+    }
+    if (ordered) return count;
+    if (count <= 32u) {
+        for (index = 1u; index < count; ++index) {
+            size_t cursor = index;
+            while (cursor > 0u &&
+                   sprite_compare(commands, scratch[cursor],
+                                  scratch[cursor - 1u]) < 0) {
+                size_t swap = scratch[cursor];
+                scratch[cursor] = scratch[cursor - 1u];
+                scratch[cursor - 1u] = swap;
+                --cursor;
+            }
         }
+        return count;
+    }
+    for (index = count / 2u; index > 0u; --index)
+        sprite_sift_down(commands, scratch, index - 1u, count);
+    for (index = count - 1u; index > 0u; --index) {
+        size_t swap = scratch[0];
+        scratch[0] = scratch[index];
+        scratch[index] = swap;
+        sprite_sift_down(commands, scratch, 0u, index);
     }
     return count;
 }
@@ -177,12 +307,12 @@ const sr_canvas *ki_td_soft_canvas_const(const ki_td_soft_renderer *renderer)
 
 int ki_td_soft_width(const ki_td_soft_renderer *renderer)
 {
-    return renderer ? renderer->width : 0;
+    return renderer_is_ready(renderer) ? renderer->width : 0;
 }
 
 int ki_td_soft_height(const ki_td_soft_renderer *renderer)
 {
-    return renderer ? renderer->height : 0;
+    return renderer_is_ready(renderer) ? renderer->height : 0;
 }
 
 uint8_t *ki_td_soft_pack_rgba(ki_td_soft_renderer *renderer)
@@ -195,13 +325,15 @@ uint8_t *ki_td_soft_pack_rgba(ki_td_soft_renderer *renderer)
 
 void ki_td_soft_clear(ki_td_soft_renderer *renderer, uint32_t rgb)
 {
-    if (renderer) sr_clear(&renderer->canvas, rgb);
+    if (renderer_is_ready(renderer)) sr_clear(&renderer->canvas, rgb);
 }
 
 void ki_td_soft_blend_pixel(ki_td_soft_renderer *renderer, int x, int y,
                             uint32_t rgb, float alpha)
 {
-    if (renderer) sr_blend(&renderer->canvas, x, y, rgb, alpha);
+    float selected;
+    if (renderer_is_ready(renderer) && normalized_alpha(alpha, &selected))
+        sr_blend(&renderer->canvas, x, y, rgb, selected);
 }
 
 static bool fill_integer_rect(ki_td_soft_renderer *renderer,
@@ -220,11 +352,6 @@ static bool fill_integer_rect(ki_td_soft_renderer *renderer,
     int source_green;
     int source_blue;
     int row;
-    if (!renderer_is_ready(renderer) ||
-        !isfinite(x) || !isfinite(y) ||
-        !isfinite(width) || !isfinite(height) ||
-        !isfinite(alpha) || width <= 0.0f || height <= 0.0f)
-        return false;
     right_value = x + width;
     bottom_value = y + height;
     if (!isfinite(right_value) || !isfinite(bottom_value) ||
@@ -293,38 +420,57 @@ static bool fill_integer_rect(ki_td_soft_renderer *renderer,
     return true;
 }
 
+static void fill_rect_ready(ki_td_soft_renderer *renderer, float x, float y,
+                            float width, float height, uint32_t rgb,
+                            float alpha)
+{
+    if (!rect_geometry(x, y, width, height)) return;
+    if (!fill_integer_rect(renderer, x, y, width, height, rgb, alpha))
+        sr_fill_rect(&renderer->canvas, x, y, width, height, rgb, alpha);
+}
+
 void ki_td_soft_fill_rect_px(ki_td_soft_renderer *renderer, float x, float y,
                              float width, float height, uint32_t rgb,
                              float alpha)
 {
-    if (renderer &&
-        !fill_integer_rect(
-            renderer, x, y, width, height, rgb, alpha))
-        sr_fill_rect(&renderer->canvas, x, y, width, height, rgb, alpha);
+    float selected;
+    if (!renderer_is_ready(renderer) || !normalized_alpha(alpha, &selected))
+        return;
+    fill_rect_ready(renderer, x, y, width, height, rgb, selected);
 }
 
 void ki_td_soft_fill_circle_px(ki_td_soft_renderer *renderer, float x, float y,
                                float radius, uint32_t rgb, float alpha)
 {
-    if (renderer)
-        sr_fill_circle(&renderer->canvas, x, y, radius, rgb, alpha);
+    float selected;
+    if (renderer_is_ready(renderer) &&
+        ellipse_geometry(x, y, radius, radius) &&
+        normalized_alpha(alpha, &selected))
+        sr_fill_circle(&renderer->canvas, x, y, radius, rgb, selected);
 }
 
 void ki_td_soft_fill_ellipse_px(ki_td_soft_renderer *renderer, float x,
                                 float y, float radius_x, float radius_y,
                                 uint32_t rgb, float alpha)
 {
-    if (renderer)
+    float selected;
+    if (renderer_is_ready(renderer) &&
+        ellipse_geometry(x, y, radius_x, radius_y) &&
+        normalized_alpha(alpha, &selected))
         sr_fill_ellipse(&renderer->canvas, x, y, radius_x, radius_y, rgb,
-                        alpha);
+                        selected);
 }
 
 void ki_td_soft_line_px(ki_td_soft_renderer *renderer, float x0, float y0,
                         float x1, float y1, float width, uint32_t rgb,
                         float alpha)
 {
-    if (renderer)
-        sr_line(&renderer->canvas, x0, y0, x1, y1, width, rgb, alpha, 0, 0);
+    float selected;
+    if (renderer_is_ready(renderer) &&
+        line_geometry(x0, y0, x1, y1, width) &&
+        normalized_alpha(alpha, &selected))
+        sr_line(&renderer->canvas, x0, y0, x1, y1, width, rgb, selected,
+                0, 0);
 }
 
 void ki_td_soft_fill_rect(ki_td_soft_renderer *renderer,
@@ -332,21 +478,35 @@ void ki_td_soft_fill_rect(ki_td_soft_renderer *renderer,
                           float width, float height, uint32_t rgb,
                           float alpha)
 {
-    if (!view) return;
-    ki_td_soft_fill_rect_px(renderer, (float)ki_td_screen_x(view, x),
-                            (float)ki_td_screen_y(view, y),
-                            ki_td_screen_scale(view, width),
-                            ki_td_screen_scale(view, height), rgb, alpha);
+    int screen_x;
+    int screen_y;
+    float screen_width;
+    float screen_height;
+    float selected;
+    if (!renderer_is_ready(renderer) ||
+        !normalized_alpha(alpha, &selected) ||
+        !ki_td_internal_screen_x(view, x, &screen_x) ||
+        !ki_td_internal_screen_y(view, y, &screen_y) ||
+        !ki_td_internal_screen_scale(view, width, &screen_width) ||
+        !ki_td_internal_screen_scale(view, height, &screen_height))
+        return;
+    fill_rect_ready(renderer, (float)screen_x, (float)screen_y,
+                    screen_width, screen_height, rgb, selected);
 }
 
 void ki_td_soft_fill_circle(ki_td_soft_renderer *renderer,
                             const ki_td_view *view, float x, float y,
                             float radius, uint32_t rgb, float alpha)
 {
-    if (!view) return;
-    ki_td_soft_fill_circle_px(renderer, (float)ki_td_screen_x(view, x),
-                              (float)ki_td_screen_y(view, y),
-                              ki_td_screen_scale(view, radius), rgb, alpha);
+    int screen_x;
+    int screen_y;
+    float screen_radius;
+    if (!ki_td_internal_screen_x(view, x, &screen_x) ||
+        !ki_td_internal_screen_y(view, y, &screen_y) ||
+        !ki_td_internal_screen_scale(view, radius, &screen_radius))
+        return;
+    ki_td_soft_fill_circle_px(renderer, (float)screen_x, (float)screen_y,
+                              screen_radius, rgb, alpha);
 }
 
 void ki_td_soft_fill_ellipse(ki_td_soft_renderer *renderer,
@@ -354,24 +514,37 @@ void ki_td_soft_fill_ellipse(ki_td_soft_renderer *renderer,
                              float radius_x, float radius_y, uint32_t rgb,
                              float alpha)
 {
-    if (!view) return;
-    ki_td_soft_fill_ellipse_px(renderer, (float)ki_td_screen_x(view, x),
-                               (float)ki_td_screen_y(view, y),
-                               ki_td_screen_scale(view, radius_x),
-                               ki_td_screen_scale(view, radius_y), rgb,
-                               alpha);
+    int screen_x;
+    int screen_y;
+    float screen_radius_x;
+    float screen_radius_y;
+    if (!ki_td_internal_screen_x(view, x, &screen_x) ||
+        !ki_td_internal_screen_y(view, y, &screen_y) ||
+        !ki_td_internal_screen_scale(view, radius_x, &screen_radius_x) ||
+        !ki_td_internal_screen_scale(view, radius_y, &screen_radius_y))
+        return;
+    ki_td_soft_fill_ellipse_px(renderer, (float)screen_x, (float)screen_y,
+                               screen_radius_x, screen_radius_y, rgb, alpha);
 }
 
 void ki_td_soft_line(ki_td_soft_renderer *renderer, const ki_td_view *view,
                      float x0, float y0, float x1, float y1, float width,
                      uint32_t rgb, float alpha)
 {
-    if (!view) return;
-    ki_td_soft_line_px(renderer, (float)ki_td_screen_x(view, x0),
-                       (float)ki_td_screen_y(view, y0),
-                       (float)ki_td_screen_x(view, x1),
-                       (float)ki_td_screen_y(view, y1),
-                       ki_td_screen_scale(view, width), rgb, alpha);
+    int screen_x0;
+    int screen_y0;
+    int screen_x1;
+    int screen_y1;
+    float screen_width;
+    if (!ki_td_internal_screen_x(view, x0, &screen_x0) ||
+        !ki_td_internal_screen_y(view, y0, &screen_y0) ||
+        !ki_td_internal_screen_x(view, x1, &screen_x1) ||
+        !ki_td_internal_screen_y(view, y1, &screen_y1) ||
+        !ki_td_internal_screen_scale(view, width, &screen_width))
+        return;
+    ki_td_soft_line_px(renderer, (float)screen_x0, (float)screen_y0,
+                       (float)screen_x1, (float)screen_y1,
+                       screen_width, rgb, alpha);
 }
 
 static const uint8_t *image_pixel(const ki_td_rgba8 *image, int x, int y)
@@ -385,8 +558,8 @@ static void blend_rgba_pixel(ki_td_soft_renderer *renderer, int x, int y,
     if (pixel[3] < 8u) return;
     uint32_t rgb = ((uint32_t)pixel[0] << 16) |
                    ((uint32_t)pixel[1] << 8) | (uint32_t)pixel[2];
-    ki_td_soft_blend_pixel(renderer, x, y, rgb,
-                           alpha * (pixel[3] / 255.0f));
+    sr_blend(&renderer->canvas, x, y, rgb,
+             alpha * ((float)pixel[3] / 255.0f));
 }
 
 static void blend_rgba_integer_block(ki_td_soft_renderer *renderer,
@@ -450,7 +623,7 @@ static void blend_rgba_integer_block(ki_td_soft_renderer *renderer,
 }
 
 static void blend_rgba_scaled_block(ki_td_soft_renderer *renderer,
-                                    int left, int top, int span,
+                                    int64_t left, int64_t top, int span,
                                     float edge_coverage,
                                     const uint8_t *pixel, float alpha)
 {
@@ -467,23 +640,23 @@ static void blend_rgba_scaled_block(ki_td_soft_renderer *renderer,
         left + span <= canvas->clip_x0 ||
         top + span <= canvas->clip_y0)
         return;
-    first_x = left < canvas->clip_x0 ? canvas->clip_x0 : left;
-    first_y = top < canvas->clip_y0 ? canvas->clip_y0 : top;
+    first_x = left < canvas->clip_x0 ? canvas->clip_x0 : (int)left;
+    first_y = top < canvas->clip_y0 ? canvas->clip_y0 : (int)top;
     last_x = left + span > canvas->clip_x1 ?
-             canvas->clip_x1 : left + span;
+             canvas->clip_x1 : (int)(left + span);
     last_y = top + span > canvas->clip_y1 ?
-             canvas->clip_y1 : top + span;
+             canvas->clip_y1 : (int)(top + span);
     pixel_alpha = alpha * ((float)pixel[3] / 255.0f);
     rgb = ((uint32_t)pixel[0] << 16) |
           ((uint32_t)pixel[1] << 8) |
           (uint32_t)pixel[2];
     for (y = first_y; y < last_y; ++y) {
         float coverage_y =
-            y == top + span - 1 ? edge_coverage : 1.0f;
+            (int64_t)y == top + span - 1 ? edge_coverage : 1.0f;
         int x;
         for (x = first_x; x < last_x; ++x) {
             float coverage_x =
-                x == left + span - 1 ? edge_coverage : 1.0f;
+                (int64_t)x == left + span - 1 ? edge_coverage : 1.0f;
             int alpha256;
             uint32_t *destination;
             uint32_t current;
@@ -535,25 +708,88 @@ static void fill_rgba_world_pixel(ki_td_soft_renderer *renderer,
                          alpha * (pixel[3] / 255.0f));
 }
 
+static bool visible_logical_grid(ki_td_soft_renderer *renderer,
+                                 const ki_td_view *view, float x, float y,
+                                 int width, int height,
+                                 ki_td_cell_bounds *bounds)
+{
+    sr_canvas *canvas;
+    ki_td_rect clip;
+    if (!renderer_is_ready(renderer) ||
+        !ki_td_internal_view_valid(view) || !isfinite(x) || !isfinite(y) ||
+        width <= 0 || height <= 0 || !bounds)
+        return false;
+    canvas = &renderer->canvas;
+    if (canvas->clip_x1 <= canvas->clip_x0 ||
+        canvas->clip_y1 <= canvas->clip_y0)
+        return false;
+    clip = (ki_td_rect){
+        canvas->clip_x0, canvas->clip_y0,
+        canvas->clip_x1 - canvas->clip_x0,
+        canvas->clip_y1 - canvas->clip_y0
+    };
+    return ki_td_view_visible_cells(
+               view, clip, x, y, 1, 1, width, height, 1, bounds) &&
+           bounds->column_count > 0 && bounds->row_count > 0;
+}
+
 void ki_td_soft_rgba_px(ki_td_soft_renderer *renderer, int x, int y,
                         const ki_td_rgba8 *image, float alpha)
 {
-    if (!renderer || !ki_td_rgba8_is_valid(image)) return;
-    for (int yy = 0; yy < image->height; yy++)
-        for (int xx = 0; xx < image->width; xx++)
-            blend_rgba_pixel(renderer, x + xx, y + yy,
-                             image_pixel(image, xx, yy), alpha);
+    sr_canvas *canvas;
+    int first_x;
+    int first_y;
+    int last_x;
+    int last_y;
+    int64_t first_x64;
+    int64_t first_y64;
+    int64_t last_x64;
+    int64_t last_y64;
+    float selected;
+    if (!renderer_is_ready(renderer) || !ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected))
+        return;
+    canvas = &renderer->canvas;
+    first_x64 = (int64_t)canvas->clip_x0 - x;
+    first_y64 = (int64_t)canvas->clip_y0 - y;
+    last_x64 = (int64_t)canvas->clip_x1 - x;
+    last_y64 = (int64_t)canvas->clip_y1 - y;
+    if (first_x64 < 0) first_x64 = 0;
+    if (first_y64 < 0) first_y64 = 0;
+    if (last_x64 > image->width) last_x64 = image->width;
+    if (last_y64 > image->height) last_y64 = image->height;
+    if (first_x64 >= last_x64 || first_y64 >= last_y64 ||
+        first_x64 >= image->width || first_y64 >= image->height ||
+        last_x64 <= 0 || last_y64 <= 0)
+        return;
+    first_x = (int)first_x64;
+    first_y = (int)first_y64;
+    last_x = (int)last_x64;
+    last_y = (int)last_y64;
+    for (int yy = first_y; yy < last_y; ++yy)
+        for (int xx = first_x; xx < last_x; ++xx)
+            blend_rgba_pixel(
+                renderer, (int)((int64_t)x + xx), (int)((int64_t)y + yy),
+                image_pixel(image, xx, yy), selected);
 }
 
 void ki_td_soft_rgba(ki_td_soft_renderer *renderer, const ki_td_view *view,
                      float x, float y, const ki_td_rgba8 *image, float alpha)
 {
-    if (!renderer || !view || !ki_td_rgba8_is_valid(image)) return;
-    for (int yy = 0; yy < image->height; yy++)
-        for (int xx = 0; xx < image->width; xx++)
+    ki_td_cell_bounds visible;
+    float selected;
+    if (!ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected) ||
+        !visible_logical_grid(renderer, view, x, y, image->width,
+                              image->height, &visible))
+        return;
+    for (int yy = visible.first_row;
+         yy < visible.first_row + visible.row_count; ++yy)
+        for (int xx = visible.first_column;
+             xx < visible.first_column + visible.column_count; ++xx)
             fill_rgba_world_pixel(renderer, view, x + (float)xx,
                                   y + (float)yy,
-                                  image_pixel(image, xx, yy), alpha);
+                                  image_pixel(image, xx, yy), selected);
 }
 
 static void modulate_rgba_pixel(const uint8_t *pixel, uint32_t tint_rgb,
@@ -578,50 +814,70 @@ static void draw_rgba_resized(ki_td_soft_renderer *renderer,
     int integer_scale;
     int scaled_span;
     float edge_coverage;
-    if (!renderer_is_ready(renderer) || !view ||
-        !ki_td_rgba8_is_valid(image) || width <= 0 || height <= 0)
+    float selected;
+    ki_td_cell_bounds visible;
+    if (!ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected) ||
+        !visible_logical_grid(renderer, view, x, y, width, height, &visible))
         return;
-    integer_scale = (int)floorf(view->scale + 0.5f);
+    if (!ki_td_internal_float_to_int(
+            floorf(view->scale + 0.5f), &integer_scale))
+        return;
     if (integer_scale >= 1 &&
         fabsf(view->scale - (float)integer_scale) <= 0.01f) {
-        int origin_x = ki_td_screen_x(view, x);
-        int origin_y = ki_td_screen_y(view, y);
-        for (int yy = 0; yy < height; yy++) {
-            int source_y = yy * image->height / height;
+        int origin_x;
+        int origin_y;
+        if (!ki_td_internal_screen_x(view, x, &origin_x) ||
+            !ki_td_internal_screen_y(view, y, &origin_y))
+            return;
+        for (int yy = visible.first_row;
+             yy < visible.first_row + visible.row_count; ++yy) {
+            int source_y = (int)(
+                (int64_t)yy * image->height / height);
             int64_t top =
                 (int64_t)origin_y + (int64_t)yy * integer_scale;
             int64_t bottom = top + integer_scale;
-            for (int xx = 0; xx < width; xx++) {
+            for (int xx = visible.first_column;
+                 xx < visible.first_column + visible.column_count; ++xx) {
                 const uint8_t *pixel;
                 uint8_t tinted_pixel[4];
-                int source_x = xx * image->width / width;
+                int source_x = (int)(
+                    (int64_t)xx * image->width / width);
                 int64_t left =
                     (int64_t)origin_x + (int64_t)xx * integer_scale;
                 int64_t right = left + integer_scale;
                 pixel = image_pixel(image, source_x, source_y);
                 modulate_rgba_pixel(pixel, tint_rgb, tinted_pixel);
                 blend_rgba_integer_block(
-                    renderer, left, top, right, bottom, tinted_pixel, alpha);
+                    renderer, left, top, right, bottom, tinted_pixel,
+                    selected);
             }
         }
         return;
     }
-    scaled_span = (int)ceilf(view->scale);
+    if (!ki_td_internal_float_to_int(ceilf(view->scale), &scaled_span) ||
+        scaled_span <= 0)
+        return;
     edge_coverage =
         view->scale - (float)(scaled_span - 1);
-    for (int yy = 0; yy < height; yy++) {
-        int source_y = yy * image->height / height;
-        int top = ki_td_screen_y(view, y + (float)yy);
-        for (int xx = 0; xx < width; xx++) {
+    for (int yy = visible.first_row;
+         yy < visible.first_row + visible.row_count; ++yy) {
+        int source_y = (int)((int64_t)yy * image->height / height);
+        int top;
+        if (!ki_td_internal_screen_y(view, y + (float)yy, &top)) continue;
+        for (int xx = visible.first_column;
+             xx < visible.first_column + visible.column_count; ++xx) {
             const uint8_t *pixel;
             uint8_t tinted_pixel[4];
-            int source_x = xx * image->width / width;
-            int left = ki_td_screen_x(view, x + (float)xx);
+            int source_x = (int)((int64_t)xx * image->width / width);
+            int left;
+            if (!ki_td_internal_screen_x(view, x + (float)xx, &left))
+                continue;
             pixel = image_pixel(image, source_x, source_y);
             modulate_rgba_pixel(pixel, tint_rgb, tinted_pixel);
             blend_rgba_scaled_block(
                 renderer, left, top, scaled_span, edge_coverage,
-                tinted_pixel, alpha);
+                tinted_pixel, selected);
         }
     }
 }
@@ -649,18 +905,30 @@ void ki_td_soft_rgba_rotated(ki_td_soft_renderer *renderer,
                              const ki_td_rgba8 *image, int quarter_turns,
                              float alpha)
 {
-    if (!renderer || !view || !ki_td_rgba8_is_valid(image)) return;
+    ki_td_cell_bounds visible;
+    float selected;
+    int destination_width;
+    int destination_height;
+    if (!ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected))
+        return;
     int turns = quarter_turns % 4;
     if (turns < 0) turns += 4;
     if (turns == 0) {
-        ki_td_soft_rgba(renderer, view, x, y, image, alpha);
+        ki_td_soft_rgba(renderer, view, x, y, image, selected);
         return;
     }
+    destination_width = turns == 2 ? image->width : image->height;
+    destination_height = turns == 2 ? image->height : image->width;
+    if (!visible_logical_grid(
+            renderer, view, x, y, destination_width, destination_height,
+            &visible))
+        return;
 
     for (int source_y = 0; source_y < image->height; source_y++) {
         for (int source_x = 0; source_x < image->width; source_x++) {
-            int dest_x = source_x;
-            int dest_y = source_y;
+            int dest_x;
+            int dest_y;
             if (turns == 1) {
                 dest_x = image->height - 1 - source_y;
                 dest_y = source_x;
@@ -671,10 +939,15 @@ void ki_td_soft_rgba_rotated(ki_td_soft_renderer *renderer,
                 dest_x = source_y;
                 dest_y = image->width - 1 - source_x;
             }
+            if (dest_x < visible.first_column ||
+                dest_x >= visible.first_column + visible.column_count ||
+                dest_y < visible.first_row ||
+                dest_y >= visible.first_row + visible.row_count)
+                continue;
             fill_rgba_world_pixel(renderer, view, x + (float)dest_x,
                                   y + (float)dest_y,
                                   image_pixel(image, source_x, source_y),
-                                  alpha);
+                                  selected);
         }
     }
 }
@@ -683,35 +956,37 @@ void ki_td_soft_rgba_pixel_art(ki_td_soft_renderer *renderer,
                                const ki_td_view *view, float x, float y,
                                const ki_td_rgba8 *image, float alpha)
 {
-    if (!renderer || !view || !ki_td_rgba8_is_valid(image)) return;
-    int scale = (int)(view->scale + 0.5f);
+    float selected;
+    int scale;
+    ki_td_cell_bounds visible;
+    int origin_x;
+    int origin_y;
+    if (!ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected) ||
+        !ki_td_internal_view_valid(view))
+        return;
+    if (!ki_td_internal_float_to_int(
+            floorf(view->scale + 0.5f), &scale))
+        return;
     if (scale < 1 || fabsf(view->scale - (float)scale) > 0.01f) {
-        ki_td_soft_rgba(renderer, view, x, y, image, alpha);
+        ki_td_soft_rgba(renderer, view, x, y, image, selected);
         return;
     }
-
-    int origin_x = ki_td_screen_x(view, x);
-    int origin_y = ki_td_screen_y(view, y);
-    for (int yy = 0; yy < image->height; yy++) {
-        for (int xx = 0; xx < image->width; xx++) {
+    if (!visible_logical_grid(renderer, view, x, y, image->width,
+                              image->height, &visible) ||
+        !ki_td_internal_screen_x(view, x, &origin_x) ||
+        !ki_td_internal_screen_y(view, y, &origin_y))
+        return;
+    for (int yy = visible.first_row;
+         yy < visible.first_row + visible.row_count; ++yy) {
+        for (int xx = visible.first_column;
+             xx < visible.first_column + visible.column_count; ++xx) {
             const uint8_t *pixel = image_pixel(image, xx, yy);
-            if (pixel[3] < 8u) continue;
-            uint32_t rgb = ((uint32_t)pixel[0] << 16) |
-                           ((uint32_t)pixel[1] << 8) |
-                           (uint32_t)pixel[2];
-            int pixel_x = origin_x + xx * scale;
-            int pixel_y = origin_y + yy * scale;
-            if (pixel[3] == 255u) {
-                ki_td_soft_fill_rect_px(renderer, (float)pixel_x,
-                                        (float)pixel_y, (float)scale,
-                                        (float)scale, rgb, alpha);
-                continue;
-            }
-            for (int dy = 0; dy < scale; dy++)
-                for (int dx = 0; dx < scale; dx++)
-                    ki_td_soft_blend_pixel(
-                        renderer, pixel_x + dx, pixel_y + dy, rgb,
-                        alpha * (pixel[3] / 255.0f));
+            int64_t pixel_x = (int64_t)origin_x + (int64_t)xx * scale;
+            int64_t pixel_y = (int64_t)origin_y + (int64_t)yy * scale;
+            blend_rgba_integer_block(
+                renderer, pixel_x, pixel_y, pixel_x + scale,
+                pixel_y + scale, pixel, selected);
         }
     }
 }
@@ -742,8 +1017,10 @@ void ki_td_soft_nine_slice(ki_td_soft_renderer *renderer,
     int source_bottom;
     int destination_right;
     int destination_bottom;
-    if (!renderer || !view || !slice || !isfinite(x) || !isfinite(y) ||
-        !isfinite(alpha) || alpha <= 0.0f ||
+    float selected;
+    if (!renderer_is_ready(renderer) || !ki_td_internal_view_valid(view) ||
+        !slice || !isfinite(x) || !isfinite(y) ||
+        !normalized_alpha(alpha, &selected) ||
         !ki_td_rgba8_is_valid(&slice->image) || slice->left <= 0 ||
         slice->top <= 0 || slice->right <= 0 || slice->bottom <= 0 ||
         slice->right >= slice->image.width ||
@@ -764,41 +1041,67 @@ void ki_td_soft_nine_slice(ki_td_soft_renderer *renderer,
     destination_bottom = height - slice->bottom;
 
     draw_subimage(renderer, view, x, y, slice->left, slice->top,
-                  &slice->image, 0, 0, slice->left, slice->top, alpha);
+                  &slice->image, 0, 0, slice->left, slice->top, selected);
     if (center_width > 0)
         draw_subimage(renderer, view, x + (float)slice->left, y,
                       center_width, slice->top, &slice->image, slice->left,
-                      0, source_center_width, slice->top, alpha);
+                      0, source_center_width, slice->top, selected);
     draw_subimage(renderer, view, x + (float)destination_right, y,
                   slice->right, slice->top, &slice->image, source_right, 0,
-                  slice->right, slice->top, alpha);
+                  slice->right, slice->top, selected);
     if (center_height > 0)
         draw_subimage(renderer, view, x, y + (float)slice->top,
                       slice->left, center_height, &slice->image, 0, slice->top,
-                      slice->left, source_center_height, alpha);
+                      slice->left, source_center_height, selected);
     if (center_width > 0 && center_height > 0)
         draw_subimage(renderer, view, x + (float)slice->left,
                       y + (float)slice->top, center_width, center_height,
                       &slice->image, slice->left, slice->top,
-                      source_center_width, source_center_height, alpha);
+                      source_center_width, source_center_height, selected);
     if (center_height > 0)
         draw_subimage(renderer, view, x + (float)destination_right,
                       y + (float)slice->top, slice->right, center_height,
                       &slice->image, source_right, slice->top, slice->right,
-                      source_center_height, alpha);
+                      source_center_height, selected);
     draw_subimage(renderer, view, x, y + (float)destination_bottom,
                   slice->left, slice->bottom, &slice->image, 0, source_bottom,
-                  slice->left, slice->bottom, alpha);
+                  slice->left, slice->bottom, selected);
     if (center_width > 0)
         draw_subimage(renderer, view, x + (float)slice->left,
                       y + (float)destination_bottom, center_width,
                       slice->bottom, &slice->image, slice->left,
                       source_bottom, source_center_width, slice->bottom,
-                      alpha);
+                      selected);
     draw_subimage(renderer, view, x + (float)destination_right,
                   y + (float)destination_bottom, slice->right, slice->bottom,
                   &slice->image, source_right, source_bottom, slice->right,
-                  slice->bottom, alpha);
+                  slice->bottom, selected);
+}
+
+static bool visible_tile_bounds(ki_td_soft_renderer *renderer,
+                                const ki_td_view *view,
+                                const ki_td_tile_batch *batch,
+                                ki_td_cell_bounds *bounds)
+{
+    sr_canvas *canvas;
+    ki_td_rect clip;
+    if (!renderer_is_ready(renderer) ||
+        !ki_td_internal_view_valid(view) || !batch || !bounds)
+        return false;
+    canvas = &renderer->canvas;
+    if (canvas->clip_x1 <= canvas->clip_x0 ||
+        canvas->clip_y1 <= canvas->clip_y0)
+        return false;
+    clip = (ki_td_rect){
+        canvas->clip_x0, canvas->clip_y0,
+        canvas->clip_x1 - canvas->clip_x0,
+        canvas->clip_y1 - canvas->clip_y0
+    };
+    return ki_td_view_visible_cells(
+               view, clip, batch->x, batch->y,
+               batch->tile_width, batch->tile_height,
+               (int)batch->columns, (int)batch->rows, 1, bounds) &&
+           bounds->column_count > 0 && bounds->row_count > 0;
 }
 
 void ki_td_soft_tile_batch(ki_td_soft_renderer *renderer,
@@ -808,15 +1111,23 @@ void ki_td_soft_tile_batch(ki_td_soft_renderer *renderer,
     uint32_t atlas_cell_width;
     uint32_t atlas_cell_height;
     uint64_t atlas_count;
-    uint32_t row;
-    if (!renderer || !view || !ki_td_tile_batch_is_valid(batch)) return;
+    ki_td_cell_bounds visible;
+    float selected;
+    int row;
+    if (!ki_td_tile_batch_is_valid(batch) ||
+        !normalized_alpha(batch->alpha, &selected) ||
+        !visible_tile_bounds(renderer, view, batch, &visible))
+        return;
     atlas_cell_width = (uint32_t)batch->atlas->width / batch->atlas_columns;
     atlas_cell_height = (uint32_t)batch->atlas->height / batch->atlas_rows;
     atlas_count = (uint64_t)batch->atlas_columns * batch->atlas_rows;
-    for (row = 0u; row < batch->rows; ++row) {
-        uint32_t column;
-        for (column = 0u; column < batch->columns; ++column) {
-            size_t index = (size_t)row * batch->columns + column;
+    for (row = visible.first_row;
+         row < visible.first_row + visible.row_count; ++row) {
+        int column;
+        for (column = visible.first_column;
+             column < visible.first_column + visible.column_count;
+             ++column) {
+            size_t index = (size_t)row * batch->columns + (size_t)column;
             uint32_t cell = batch->cells[index];
             uint32_t source_column;
             uint32_t source_row;
@@ -824,13 +1135,14 @@ void ki_td_soft_tile_batch(ki_td_soft_renderer *renderer,
                 continue;
             source_column = cell % batch->atlas_columns;
             source_row = cell / batch->atlas_columns;
-            draw_subimage(renderer, view,
+            draw_subimage(
+                renderer, view,
                 batch->x + (float)column * (float)batch->tile_width,
                 batch->y + (float)row * (float)batch->tile_height,
                 batch->tile_width, batch->tile_height, batch->atlas,
                 (int)(source_column * atlas_cell_width),
                 (int)(source_row * atlas_cell_height),
-                (int)atlas_cell_width, (int)atlas_cell_height, batch->alpha);
+                (int)atlas_cell_width, (int)atlas_cell_height, selected);
         }
     }
 }
@@ -843,7 +1155,9 @@ void ki_td_soft_sprite_layers(ki_td_soft_renderer *renderer,
 {
     size_t ordered;
     size_t cursor;
-    if (!renderer || !view) return;
+    if (!renderer_is_ready(renderer) ||
+        !ki_td_internal_view_valid(view))
+        return;
     ordered = ki_td_sprite_order(commands, count, scratch, scratch_count);
     if (ordered != count) return;
     for (cursor = 0u; cursor < ordered; ++cursor) {

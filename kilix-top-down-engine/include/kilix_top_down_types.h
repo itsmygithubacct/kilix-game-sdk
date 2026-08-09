@@ -10,7 +10,7 @@ extern "C" {
 
 #define KI_TD_VERSION_MAJOR 0
 #define KI_TD_VERSION_MINOR 3
-#define KI_TD_VERSION_PATCH 1
+#define KI_TD_VERSION_PATCH 2
 
 typedef struct ki_td_rect {
     int x;

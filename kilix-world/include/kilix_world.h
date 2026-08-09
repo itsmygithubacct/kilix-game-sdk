@@ -15,8 +15,8 @@ extern "C" {
 #endif
 
 #define KILIX_WORLD_VERSION_MAJOR 0
-#define KILIX_WORLD_VERSION_MINOR 2
-#define KILIX_WORLD_VERSION_PATCH 1
+#define KILIX_WORLD_VERSION_MINOR 3
+#define KILIX_WORLD_VERSION_PATCH 0
 #define KILIX_WORLD_NO_INDEX SIZE_MAX
 
 typedef enum kilix_world_result {
@@ -52,6 +52,12 @@ typedef struct kilix_world_grid {
     kilix_world_opaque_fn opaque;
 } kilix_world_grid;
 
+/*
+ * Grid callbacks are borrowed and may be omitted. They and their context
+ * must remain alive, and their answers must remain stable, for the duration
+ * of a query. A movement cost of zero makes that directed step unavailable.
+ */
+
 kilix_world_result kilix_world_grid_init(
     kilix_world_grid *grid, int32_t width, int32_t height, void *context,
     kilix_world_walkable_fn walkable,
@@ -84,6 +90,11 @@ typedef struct kilix_world_search {
     size_t heap_size;
 } kilix_world_search;
 
+/*
+ * Bind five aligned, mutually disjoint arrays and a disjoint search object.
+ * Each array has cell_capacity elements of its declared type; capacity must
+ * be in 1..UINT32_MAX. Failed binding leaves the search object unchanged.
+ */
 kilix_world_result kilix_world_search_bind(
     kilix_world_search *search, uint32_t *heap, size_t *heap_positions,
     uint32_t *distance, size_t *previous, uint8_t *closed,
@@ -91,8 +102,13 @@ kilix_world_result kilix_world_search_bind(
 
 /*
  * Find a deterministic minimum-cost cardinal path. Start and goal must both
- * be walkable. The returned path includes start and goal. On NO_SPACE,
- * *path_count reports the required cell count.
+ * be walkable. The returned path includes start and goal. Path storage,
+ * path_count, and optional total_cost must be mutually disjoint and disjoint
+ * from the search object and arrays. On NO_SPACE, path_count reports the
+ * required cell count, total_cost is published when requested, and no path
+ * cells are written. Every other failure leaves all three outputs unchanged.
+ * A representable cost of UINT32_MAX is valid; a reachable frontier beyond
+ * that range reports OVERFLOW when no representable route reaches the goal.
  */
 kilix_world_result kilix_world_find_path(
     const kilix_world_grid *grid, kilix_world_cell start,
@@ -103,14 +119,23 @@ kilix_world_result kilix_world_find_path(
 /*
  * Enumerate cells whose minimum cardinal movement cost is <= max_cost. The
  * start cell must be walkable. Results are ordered by cost, then row-major
- * cell index. On NO_SPACE, *cell_count reports the required count.
+ * cell index. Cell storage and cell_count must be disjoint from each other
+ * and from the search object and arrays. On NO_SPACE, cell_count reports the
+ * required count and no cells are written. Every other failure leaves both
+ * outputs unchanged.
  */
 kilix_world_result kilix_world_reachable(
     const kilix_world_grid *grid, kilix_world_cell start,
     uint32_t max_cost, kilix_world_search *search,
     kilix_world_cell *cells, size_t cell_capacity, size_t *cell_count);
 
-/* Bresenham visibility; the origin never blocks its own ray. */
+/*
+ * Direction-preserving Bresenham visibility. Tie-sensitive diagonal rays may
+ * visit different cells when their endpoints are reversed; this established
+ * behavior is retained for gameplay compatibility. The origin never blocks
+ * its own ray. The goal blocks only when requested. Failure leaves visible
+ * unchanged.
+ */
 kilix_world_result kilix_world_line_of_sight(
     const kilix_world_grid *grid, kilix_world_cell from,
     kilix_world_cell to, bool opaque_goal_blocks, bool *visible);
@@ -148,6 +173,8 @@ typedef struct kilix_world_map {
     const kilix_world_object *objects;
     size_t object_count;
 } kilix_world_map;
+
+/* Map records and their borrowed arrays must remain immutable during queries. */
 
 const kilix_world_region *kilix_world_region_at(
     const kilix_world_map *map, kilix_world_cell cell);

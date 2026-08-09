@@ -46,8 +46,11 @@ kilix_world_result kilix_world_td_point_cell(
 
 /*
  * Convert cells to inset overlay rectangles or cell-center path points.
- * On NO_SPACE, the output count reports the required capacity and no output
- * elements are written.
+ * The grid and layout must be valid even for an empty input. Input storage,
+ * output storage, and the output count must be mutually disjoint. On
+ * NO_SPACE, the output count reports the required capacity and no output
+ * elements are written. Every other failure, including coordinate overflow,
+ * leaves the output array and count unchanged.
  */
 kilix_world_result kilix_world_td_cell_rects(
     const kilix_world_grid *grid, const kilix_world_td_layout *layout,

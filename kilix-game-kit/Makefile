@@ -4,28 +4,40 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 
 CC ?= cc
+CXX ?= c++
 AR ?= ar
 INSTALL ?= install
 
-KITTYTS_DIR := third_party/kitty-terminal-session
-KITTYFB_DIR := $(KITTYTS_DIR)/third_party/kitty-framebuffer
-KITTYIN_DIR := $(KITTYTS_DIR)/third_party/kitty-input
-KITTYKB_DIR := $(KITTYIN_DIR)/third_party/kitty_keyboard
-RASTER_DIR := third_party/soft-raster
-PCMMIX_DIR := third_party/pcm-mixer
-STATE_DIR := third_party/kilix-state
+KITTY_TERMINAL_SESSION_DIR ?= third_party/kitty-terminal-session
+KITTY_FRAMEBUFFER_DIR ?= $(KITTY_TERMINAL_SESSION_DIR)/third_party/kitty-framebuffer
+KITTY_INPUT_DIR ?= $(KITTY_TERMINAL_SESSION_DIR)/third_party/kitty-input
+KITTY_KEYBOARD_DIR ?= $(KITTY_INPUT_DIR)/third_party/kitty_keyboard
+SOFT_RASTER_DIR ?= third_party/soft-raster
+PCM_MIXER_DIR ?= third_party/pcm-mixer
+KILIX_STATE_DIR ?= third_party/kilix-state
 
-CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+# Retain the original private names for direct standalone overrides.
+KITTYTS_DIR ?= $(KITTY_TERMINAL_SESSION_DIR)
+KITTYFB_DIR ?= $(KITTY_FRAMEBUFFER_DIR)
+KITTYIN_DIR ?= $(KITTY_INPUT_DIR)
+KITTYKB_DIR ?= $(KITTY_KEYBOARD_DIR)
+RASTER_DIR ?= $(SOFT_RASTER_DIR)
+PCMMIX_DIR ?= $(PCM_MIXER_DIR)
+STATE_DIR ?= $(KILIX_STATE_DIR)
+
+override CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
 	-Iinclude -I$(KITTYTS_DIR)/include -I$(KITTYFB_DIR)/include \
 	-I$(KITTYIN_DIR)/include -I$(KITTYKB_DIR)/include \
-	-I$(RASTER_DIR)/include -I$(PCMMIX_DIR)/include -I$(STATE_DIR)/include
+	-I$(RASTER_DIR)/include -I$(PCMMIX_DIR)/include -I$(STATE_DIR)/include \
+	$(EXTRA_CPPFLAGS)
 WARNINGS := \
 	-Wall -Wextra -Wpedantic -Wconversion -Wshadow \
 	-Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 CFLAGS ?= -O2 -g
-override CFLAGS += -std=c11 -fPIC -pthread $(WARNINGS)
+override CFLAGS += -std=c11 -fPIC -pthread $(WARNINGS) $(EXTRA_CFLAGS)
+override LDFLAGS += $(EXTRA_LDFLAGS)
+override LDLIBS += -lz -lpthread -lm $(EXTRA_LDLIBS)
 DEPFLAGS := -MMD -MP
-LDLIBS := -lz -lpthread -lm
 
 OBJECTS := \
 	$(BUILD_DIR)/kilix_game_loop.o \
@@ -47,9 +59,12 @@ LIB := $(BUILD_DIR)/lib$(PROJECT).a
 TEST_OBJECT := $(BUILD_DIR)/kilix_game_test.o
 TEST_LIB := $(BUILD_DIR)/libkilix-game-test.a
 TEST_BIN := $(BUILD_DIR)/test-game-kit
-DEPS := $(OBJECTS:.o=.d) $(TEST_OBJECT:.o=.d)
+BENCHMARK_BIN := $(BUILD_DIR)/benchmark-game-kit
+DEPS := $(OBJECTS:.o=.d) $(TEST_OBJECT:.o=.d) $(TEST_BIN).d \
+	$(BENCHMARK_BIN).d
 
-.PHONY: all clean install sanitize test test-deps
+.PHONY: all analyze benchmark clean install release-gate sanitize test \
+	test-clang test-deps test-install test-make-fragment
 
 all: $(LIB) $(TEST_LIB)
 
@@ -112,12 +127,22 @@ $(TEST_LIB): $(TEST_OBJECT)
 	$(AR) rcs $@ $^
 
 $(TEST_BIN): tests/test_game_kit.c $(LIB) $(TEST_LIB) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(TEST_LIB) $(LIB) $(LDLIBS) -lutil -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) $< $(TEST_LIB) $(LIB) \
+		$(LDFLAGS) $(LDLIBS) -lutil -o $@
 
-test: $(TEST_BIN)
+$(BENCHMARK_BIN): benchmarks/benchmark_game_kit.c $(LIB) $(TEST_LIB) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) $< $(TEST_LIB) $(LIB) \
+		$(LDFLAGS) $(LDLIBS) -lutil -o $@
+
+test: $(TEST_BIN) test-make-fragment
 	$(TEST_BIN)
-	$(MAKE) -f tests/test_make_fragment.mk check-root
 	tools/check-submodules.sh
+
+test-make-fragment:
+	$(MAKE) -f tests/test_make_fragment.mk check-root
+
+benchmark: $(BENCHMARK_BIN)
+	$(BENCHMARK_BIN)
 
 test-deps:
 	$(MAKE) -C $(KITTYTS_DIR) test
@@ -125,14 +150,31 @@ test-deps:
 	$(MAKE) -C $(PCMMIX_DIR) test
 	$(MAKE) -C $(STATE_DIR) test
 
-sanitize: $(LIB) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 -pthread $(WARNINGS) \
-		-fno-omit-frame-pointer -fsanitize=address,undefined \
-		src/kilix_game_loop.c src/kilix_game_runtime.c \
-		src/kilix_game_audio.c src/kilix_game_test.c tests/test_game_kit.c \
-		$(LIB) $(LDLIBS) -lutil -fsanitize=address,undefined \
-		-o $(BUILD_DIR)/test-game-kit-sanitize
-	ASAN_OPTIONS=detect_leaks=1 $(BUILD_DIR)/test-game-kit-sanitize
+SANITIZE_BUILD_DIR ?= $(BUILD_DIR)/sanitize
+sanitize:
+	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:handle_segv=0 \
+		UBSAN_OPTIONS=halt_on_error=1 \
+		$(MAKE) --no-print-directory BUILD_DIR="$(SANITIZE_BUILD_DIR)" \
+		EXTRA_CFLAGS="-O1 -g3 -fno-omit-frame-pointer \
+		-fsanitize=address,undefined" \
+		EXTRA_LDFLAGS="-fsanitize=address,undefined" test
+
+CLANG_BUILD_DIR ?= $(BUILD_DIR)/clang
+test-clang:
+	$(MAKE) --no-print-directory BUILD_DIR="$(CLANG_BUILD_DIR)" clean
+	$(MAKE) --no-print-directory CC=clang \
+		BUILD_DIR="$(CLANG_BUILD_DIR)" EXTRA_CFLAGS="-Werror" test
+
+ANALYZE_BUILD_DIR ?= $(BUILD_DIR)/analyze
+analyze:
+	$(MAKE) --no-print-directory BUILD_DIR="$(ANALYZE_BUILD_DIR)" clean
+	$(MAKE) --no-print-directory BUILD_DIR="$(ANALYZE_BUILD_DIR)" \
+		EXTRA_CFLAGS="-O0 -fanalyzer -Werror" all
+
+test-install:
+	sh tests/test_install.sh "$(CC)" "$(CXX)"
+
+release-gate: test test-clang sanitize analyze test-install benchmark
 
 install: all
 	$(INSTALL) -d $(DESTDIR)$(PREFIX)/include $(DESTDIR)$(PREFIX)/lib

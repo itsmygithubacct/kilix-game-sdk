@@ -34,6 +34,10 @@ git clone --recurse-submodules \
 cd kilix-game-sdk/kilix-game-kit
 make test
 make sanitize
+make test-clang
+make analyze
+make test-install
+make benchmark
 make test-deps
 ```
 
@@ -60,10 +64,14 @@ game: $(GAME_OBJECTS) $(KILIX_GAME_KIT_LIB)
 Consumers can include `kilix_game_kit.h` for the complete runtime stack or
 the individual public headers. Since the static archive stores dependencies
 as separate objects, the linker pulls only the APIs a game uses. The fragment
-also exports the existing `KITTY_FRAMEBUFFER_DIR`, `KITTY_KEYBOARD_DIR`,
+preserves the consumer Makefile's default goal, exports the POSIX feature-test
+macros required by the public signal and terminal structures, and also exports
+the existing `KITTY_FRAMEBUFFER_DIR`, `KITTY_KEYBOARD_DIR`,
 `SOFT_RASTER_DIR`, and `PCM_MIXER_DIR` names so migrations can retain useful
 header and asset-validation prerequisites while deleting duplicate vendor
-object recipes.
+object recipes. Installed-header consumers that do not use the fragment must
+define `_POSIX_C_SOURCE=200809L` and `_DEFAULT_SOURCE` before including system
+headers, as exercised by `make test-install`.
 
 ## Fixed-step clock
 
@@ -83,7 +91,8 @@ for (;;) {
 Long stalls are clamped and excess accumulated steps are dropped, preventing
 a permanent “spiral of death.” The clock reports dropped time for diagnostics
 and accepts caller-supplied timestamps, so simulation timing is deterministic
-in tests.
+in tests. Even the full signed timestamp range is handled without arithmetic
+overflow before the configured frame clamp is applied.
 
 ## Runtime host
 
@@ -96,6 +105,10 @@ after SIGCONT the host restarts the terminal session over retained framebuffer
 high-water storage and resets its fixed-step clock so suspended wall time
 cannot advance simulation. Final shutdown releases the retained buffers.
 Headless mode and a frame limit make the same host usable for smoke tests.
+The signal scope restores whatever dispositions were active before it was
+installed; they need not have been defaults. The sanitizer target disables
+ASan's competing SIGSEGV interception while it verifies this deliberate
+runtime ownership.
 
 Games provide start, ordered-input-event, fixed-step, render, and stop
 callbacks. They retain full ownership of simulation and framebuffer content.
@@ -125,7 +138,16 @@ standardizes `--selftest`-style dispatch. `kilix_test_golden_suite` combines
 per-state hashes into a deterministic suite hash, and
 `kilix_test_write_ppm_rgba()` writes reviewable render artifacts.
 `kilix_test_diff_rgba()` reports pixel differences at a selectable per-channel
-tolerance.
+tolerance. PPM conversion is chunked, so artifact time scales with pixel work
+rather than one stdio call per pixel.
+
+## Compatibility
+
+Game-kit 0.5 keeps the same `kilix_game_*` and `kilix_test_*` function set.
+The reviewed terminal dependency enlarges the public aggregate host object, so
+all static consumers must rebuild with a consistent set of 0.5 headers,
+dependency headers, and archive objects; mixing the former host layout with
+the reviewed terminal archive is unsupported.
 
 ## License
 

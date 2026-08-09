@@ -4,6 +4,9 @@
 #include "kilix_game_test.h"
 #include "kilix_state_codec.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <signal.h>
 #include <stdio.h>
@@ -53,6 +56,18 @@ static bool test_fixed_step(void)
     CHECK(frame.steps == 0u && frame.frame_ns == 0);
     frame = kilix_game_clock_advance(&clock, 1210);
     CHECK(frame.steps == 1u);
+
+    /* Arbitrary caller-supplied timestamps must saturate rather than overflow
+     * before the ordinary frame and catch-up clamps run. */
+    options.step_ns = 1;
+    options.max_frame_ns = INT64_MAX;
+    options.max_steps_per_frame = 1u;
+    CHECK(kilix_game_clock_init(&clock, &options));
+    kilix_game_clock_reset(&clock, INT64_MIN);
+    frame = kilix_game_clock_advance(&clock, INT64_MAX);
+    CHECK(frame.frame_ns == INT64_MAX);
+    CHECK(frame.steps == 1u && frame.alpha == 0.0);
+    CHECK(frame.dropped_ns == INT64_MAX - 1);
     return true;
 }
 
@@ -68,6 +83,13 @@ static bool test_clock_validation_and_sleep(void)
     options.step_ns = 20;
     options.max_frame_ns = 10;
     CHECK(!kilix_game_clock_init(&clock, &options));
+    options.max_frame_ns = 20;
+    options.max_steps_per_frame = 65u;
+    CHECK(!kilix_game_clock_init(&clock, &options));
+    CHECK(!kilix_game_clock_init(NULL, NULL));
+    CHECK(kilix_game_clock_step_seconds(NULL) == 0.0);
+    CHECK(kilix_game_clock_total_steps(NULL) == 0u);
+    CHECK(kilix_game_clock_dropped_ns(NULL) == 0);
     now = kilix_game_monotonic_ns();
     CHECK(now >= 0);
     CHECK(kilix_game_sleep_until_ns(now));
@@ -112,7 +134,17 @@ static bool test_pty_and_golden_helpers(void)
     CHECK(memcmp(received, message, sizeof message - 1u) == 0);
     CHECK(kilix_test_contains(received, (size_t)count, "terminal", 8u));
     CHECK(!kilix_test_contains(received, (size_t)count, "mouse", 5u));
+    CHECK(kilix_test_contains(NULL, 0u, NULL, 0u));
+    CHECK(!kilix_test_contains(NULL, 1u, "x", 1u));
+    CHECK(!kilix_test_contains("x", 1u, "xy", 2u));
     kilix_test_pty_close(&pty);
+    kilix_test_pty_close(&pty);
+    errno = 0;
+    CHECK(!kilix_test_pty_open(NULL, 80u, 24u, 0u, 0u) && errno == EINVAL);
+    CHECK(!kilix_test_write_all(-1, NULL, 0u) && errno == EINVAL);
+    CHECK(kilix_test_write_all(STDOUT_FILENO, NULL, 0u));
+    CHECK(kilix_test_read_available(-1, NULL, 0u, 0) == -1 &&
+          errno == EINVAL);
 
     CHECK(kilix_test_hash64("hello", 5u) == UINT64_C(0xa430d84680aabd0b));
     difference = kilix_test_diff_rgba(first, second, 2u, 1u);
@@ -120,13 +152,21 @@ static bool test_pty_and_golden_helpers(void)
     CHECK(difference.maximum_channel_delta == 3u);
     difference = kilix_test_diff_rgba(first, second, 2u, 3u);
     CHECK(difference.differing_pixels == 0u);
+    difference = kilix_test_diff_rgba(first, second, SIZE_MAX / 4u + 1u, 0u);
+    CHECK(difference.differing_pixels == SIZE_MAX / 4u + 1u);
+    CHECK(difference.maximum_channel_delta == UINT8_MAX);
     return true;
 }
 
 typedef struct host_probe {
     int starts;
+    int steps;
     int renders;
     int stops;
+    bool fail_start;
+    bool fail_step;
+    bool fail_render;
+    bool raise_term;
 } host_probe;
 
 static bool host_start(kilix_game_host *host, void *user)
@@ -134,7 +174,15 @@ static bool host_start(kilix_game_host *host, void *user)
     host_probe *probe = user;
     CHECK(host != NULL);
     ++probe->starts;
-    return true;
+    return !probe->fail_start;
+}
+
+static bool host_step(kilix_game_host *host, void *user, double step_seconds)
+{
+    host_probe *probe = user;
+    CHECK(host != NULL && step_seconds > 0.0);
+    ++probe->steps;
+    return !probe->fail_step;
 }
 
 static bool host_render(kilix_game_host *host, void *user, double alpha)
@@ -142,6 +190,8 @@ static bool host_render(kilix_game_host *host, void *user, double alpha)
     host_probe *probe = user;
     CHECK(alpha >= 0.0 && alpha < 1.0);
     ++probe->renders;
+    if (probe->raise_term && probe->renders == 1) CHECK(raise(SIGTERM) == 0);
+    if (probe->fail_render) return false;
     if (probe->renders == 2) kilix_game_host_request_stop(host);
     return true;
 }
@@ -156,12 +206,17 @@ static void host_stop(kilix_game_host *host, void *user)
 static bool test_runtime_host_and_signals(void)
 {
     kilix_game_signal_scope signals;
+    kilix_game_signal_scope second_scope;
     kilix_game_host host;
     kilix_game_host_options options;
     kilix_game_host_callbacks callbacks = {0};
     host_probe probe = {0};
     kittyin_event event = {0};
+    errno = 0;
+    CHECK(!kilix_game_signals_install(NULL) && errno == EINVAL);
     CHECK(kilix_game_signals_install(&signals));
+    errno = 0;
+    CHECK(!kilix_game_signals_install(&second_scope) && errno == EBUSY);
     CHECK(raise(SIGTERM) == 0);
     CHECK(kilix_game_signals_requested(&signals));
     CHECK(kilix_game_signals_number(&signals) == SIGTERM);
@@ -193,25 +248,134 @@ static bool test_runtime_host_and_signals(void)
     return true;
 }
 
+static bool test_runtime_failure_paths(void)
+{
+    kilix_game_host host;
+    kilix_game_host original;
+    kilix_game_host_options options;
+    kilix_game_host_callbacks callbacks = {0};
+    host_probe probe = {0};
+    kilix_test_pty pty;
+    int null_fd;
+
+    callbacks.start = host_start;
+    callbacks.step = host_step;
+    callbacks.render = host_render;
+    callbacks.stop = host_stop;
+    kilix_game_host_options_init(&options);
+    options.headless = true;
+    options.install_signals = false;
+    options.idle_sleep_ns = 0;
+    options.clock.step_ns = 0;
+    (void)memset(&host, 0xa5, sizeof host);
+    original = host;
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_FAILURE);
+    CHECK(memcmp(&host, &original, sizeof host) == 0);
+
+    kilix_game_host_options_init(&options);
+    options.headless = true;
+    options.install_signals = false;
+    options.idle_sleep_ns = 0;
+    options.max_frames = 4u;
+    probe = (host_probe){0};
+    probe.fail_start = true;
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_FAILURE);
+    CHECK(probe.starts == 1 && probe.stops == 1 && probe.renders == 0);
+
+    probe = (host_probe){0};
+    probe.fail_render = true;
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_FAILURE);
+    CHECK(probe.starts == 1 && probe.renders == 1 && probe.stops == 1);
+
+    options.clock.step_ns = 1;
+    options.clock.max_frame_ns = 1000000;
+    options.clock.max_steps_per_frame = 2u;
+    probe = (host_probe){0};
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_SUCCESS);
+    CHECK(probe.starts == 1 && probe.steps > 0 && probe.renders == 2 &&
+          probe.stops == 1);
+
+    kilix_game_host_options_init(&options);
+    options.headless = true;
+    options.idle_sleep_ns = 0;
+    options.max_frames = 4u;
+    probe = (host_probe){0};
+    probe.raise_term = true;
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_SUCCESS);
+    CHECK(probe.renders == 1 && probe.stops == 1);
+
+    null_fd = open("/dev/null", O_RDWR);
+    CHECK(null_fd >= 0);
+    kilix_game_host_options_init(&options);
+    options.input_fd = null_fd;
+    options.output_fd = null_fd;
+    options.install_signals = false;
+    options.idle_sleep_ns = 0;
+    options.max_frames = 1u;
+    probe = (host_probe){0};
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_FAILURE);
+    CHECK(host.terminal_errno != 0 && probe.starts == 0 && probe.stops == 0);
+    CHECK(close(null_fd) == 0);
+
+    CHECK(kilix_test_pty_open(&pty, 80u, 24u, 640u, 480u));
+    kilix_game_host_options_init(&options);
+    options.input_fd = pty.slave_fd;
+    options.output_fd = pty.slave_fd;
+    options.install_signals = false;
+    options.idle_sleep_ns = 0;
+    options.max_frames = 1u;
+    options.terminal.framebuffer.probe_graphics = false;
+    options.terminal.framebuffer.install_winch_handler = false;
+    options.terminal.framebuffer.transport = KITTYFB_TRANSPORT_INLINE;
+    options.terminal.framebuffer.min_width = 16u;
+    options.terminal.framebuffer.max_width = 16u;
+    options.terminal.framebuffer.min_height = 8u;
+    options.terminal.framebuffer.max_height = 8u;
+    options.terminal.keyboard.probe_timeout_ms = 0;
+    probe = (host_probe){0};
+    CHECK(kilix_game_host_run(&host, &options, &callbacks, &probe) ==
+          EXIT_SUCCESS);
+    CHECK(host.frame_count == 1u && !host.terminal_started);
+    CHECK(probe.starts == 1 && probe.renders == 1 && probe.stops == 1);
+    kilix_test_pty_close(&pty);
+    return true;
+}
+
+static bool same_signal_handler(const struct sigaction *first,
+                                const struct sigaction *second)
+{
+    if ((first->sa_flags & SA_SIGINFO) != (second->sa_flags & SA_SIGINFO))
+        return false;
+    if ((first->sa_flags & SA_SIGINFO) != 0)
+        return first->sa_sigaction == second->sa_sigaction;
+    return first->sa_handler == second->sa_handler;
+}
+
 static bool test_crash_signals(void)
 {
     kilix_game_signal_scope signals;
+    struct sigaction previous;
     struct sigaction current;
     pid_t child;
     int child_status = 0;
 
     /* Installing the scope must claim the crash-class signals and restoring
      * it must hand back the previous dispositions. */
-    CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
-          current.sa_handler == SIG_DFL);
+    CHECK(sigaction(SIGSEGV, NULL, &previous) == 0);
     CHECK(kilix_game_signals_install(&signals));
     CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
-          current.sa_handler != SIG_DFL);
+          !same_signal_handler(&current, &previous));
     CHECK(sigaction(SIGFPE, NULL, &current) == 0 &&
           current.sa_handler != SIG_DFL);
     kilix_game_signals_restore(&signals);
     CHECK(sigaction(SIGSEGV, NULL, &current) == 0 &&
-          current.sa_handler == SIG_DFL);
+          same_signal_handler(&current, &previous));
 
     /* The handler must re-raise with the default disposition, so a crashing
      * process still dies with the original signal. No terminal is registered
@@ -264,6 +428,70 @@ static bool test_data_root_from_executable(void)
     CHECK(kilix_game_data_root_from_executable(
         NULL, "no-such-dir-anywhere", "also-missing", root, sizeof root));
     CHECK(strcmp(root, "no-such-dir-anywhere") == 0);
+    CHECK(!kilix_game_data_root_from_executable(NULL, NULL, NULL, root,
+                                                sizeof root));
+    CHECK(!kilix_game_data_root_from_executable(NULL, "assets", NULL, root,
+                                                1u));
+    return true;
+}
+
+static bool test_audio_validation(void)
+{
+    kilix_game_audio audio = {0};
+    kilix_game_audio_options options;
+    kilix_game_audio_cue_spec cues[2] = {
+        {0u, 0u, "missing.wav", 1.0f, 1.0f, false},
+        {0u, 0u, "also-missing.wav", 1.0f, 1.0f, false}
+    };
+    kilix_game_music_scene_spec scenes[2] = {
+        {7u, 0u, 0u, 1.0f, true},
+        {7u, 0u, 0u, 1.0f, false}
+    };
+    char error[160];
+
+    CHECK(kilix_game_data_path_is_safe("audio/.hidden.wav"));
+    CHECK(!kilix_game_data_path_is_safe(NULL));
+    CHECK(!kilix_game_data_path_is_safe(""));
+    CHECK(!kilix_game_data_path_is_safe("/absolute"));
+    CHECK(!kilix_game_data_path_is_safe("."));
+    CHECK(!kilix_game_data_path_is_safe("a//b"));
+    CHECK(!kilix_game_data_path_is_safe("a/./b"));
+    CHECK(!kilix_game_data_path_is_safe("a/../b"));
+    CHECK(!kilix_game_data_path_is_safe("a\\b"));
+
+    kilix_game_audio_options_init(&options);
+    options.cue_count = 1u;
+    options.cues = cues;
+    options.cue_spec_count = 1u;
+    options.start_mixer = false;
+    CHECK(kilix_game_audio_init(&audio, &options, error, sizeof error));
+    CHECK(kilix_game_audio_is_ready(&audio));
+    CHECK(!kilix_game_audio_is_running(&audio));
+    CHECK(audio.loaded_cues == 0u && audio.loaded_variants == 0u);
+    CHECK(kilix_game_audio_play(&audio, 0u, KILIX_GAME_AUDIO_BUS_SFX,
+                                1.0f, 1.0f) == -1);
+    CHECK(!kilix_game_audio_set_scene(&audio, 7u));
+    kilix_game_audio_set_bus(&audio, KILIX_GAME_AUDIO_BUS_MASTER, 9.0f);
+    CHECK(kilix_game_audio_bus_gain(&audio, KILIX_GAME_AUDIO_BUS_MASTER) ==
+          2.0f);
+    kilix_game_audio_fade_bus(&audio, KILIX_GAME_AUDIO_BUS_MASTER, 1.0f,
+                              0.0f);
+    CHECK(kilix_game_audio_bus_gain(&audio, KILIX_GAME_AUDIO_BUS_MASTER) ==
+          1.0f);
+    kilix_game_audio_shutdown(&audio);
+
+    options.cue_count = 0u;
+    CHECK(!kilix_game_audio_init(&audio, &options, error, sizeof error));
+    options.cue_count = 1u;
+    options.cue_spec_count = PCMMIX_BANK_VARIANTS_MAX + 1u;
+    CHECK(!kilix_game_audio_init(&audio, &options, error, sizeof error));
+    options.cue_spec_count = 2u;
+    CHECK(!kilix_game_audio_init(&audio, &options, error, sizeof error));
+    options.cue_spec_count = 0u;
+    options.cues = NULL;
+    options.scenes = scenes;
+    options.scene_count = 2u;
+    CHECK(!kilix_game_audio_init(&audio, &options, error, sizeof error));
     return true;
 }
 
@@ -339,6 +567,13 @@ static bool test_audio_cli_and_golden(void)
     };
     kilix_test_golden_suite suite;
     uint64_t suite_hash;
+    static const uint8_t expected_ppm[] = {
+        'P', '6', '\n', '2', ' ', '2', '\n', '2', '5', '5', '\n',
+        255u, 0u, 0u, 0u, 255u, 0u,
+        0u, 0u, 255u, 255u, 255u, 255u
+    };
+    uint8_t ppm[sizeof expected_ppm];
+    FILE *stream;
     CHECK(mkdtemp(directory) != NULL);
     CHECK(snprintf(wav_path, sizeof wav_path, "%s/cue.wav", directory) > 0);
     CHECK(snprintf(ppm_path, sizeof ppm_path, "%s/frame.ppm", directory) > 0);
@@ -381,6 +616,13 @@ static bool test_audio_cli_and_golden(void)
     suite_hash = suite.suite_hash;
     CHECK(kilix_test_golden_finish(&suite, suite_hash));
     CHECK(kilix_test_write_ppm_rgba(ppm_path, rgba, 2u, 2u, 8u));
+    stream = fopen(ppm_path, "rb");
+    CHECK(stream != NULL);
+    CHECK(fread(ppm, 1u, sizeof ppm, stream) == sizeof ppm);
+    CHECK(fgetc(stream) == EOF);
+    CHECK(fclose(stream) == 0);
+    CHECK(memcmp(ppm, expected_ppm, sizeof ppm) == 0);
+    CHECK(!kilix_test_write_ppm_rgba(ppm_path, rgba, 2u, 2u, 7u));
     CHECK(unlink(ppm_path) == 0);
     CHECK(unlink(wav_path) == 0);
     CHECK(rmdir(directory) == 0);
@@ -393,8 +635,10 @@ int main(void)
         !test_state_codec_embedding() ||
         !test_pty_and_golden_helpers() ||
         !test_runtime_host_and_signals() ||
+        !test_runtime_failure_paths() ||
         !test_crash_signals() ||
         !test_data_root_from_executable() ||
+        !test_audio_validation() ||
         !test_audio_cli_and_golden()) return EXIT_FAILURE;
     (void)puts("ok: kilix-game-kit");
     return EXIT_SUCCESS;

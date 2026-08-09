@@ -54,6 +54,9 @@ bool kilix_test_contains(const void *bytes, size_t byte_count,
                          const void *needle, size_t needle_size);
 
 uint64_t kilix_test_hash64(const void *bytes, size_t byte_count);
+/* An arithmetically unrepresentable RGBA span is reported like an invalid
+ * non-empty buffer: every requested pixel differs and the maximum delta is
+ * UINT8_MAX. */
 kilix_test_image_diff kilix_test_diff_rgba(const uint8_t *first,
                                            const uint8_t *second,
                                            size_t pixel_count,

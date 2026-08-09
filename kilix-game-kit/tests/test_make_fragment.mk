@@ -7,3 +7,4 @@ include tests/test_make_fragment_tail.mk
 
 check-root:
 	test "$(KILIX_GAME_KIT_ROOT)" = "$(EXPECTED_GAME_KIT_ROOT)"
+	test "$(.DEFAULT_GOAL)" = "check-root"

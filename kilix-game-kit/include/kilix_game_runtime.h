@@ -84,7 +84,8 @@ struct kilix_game_host {
 void kilix_game_host_options_init(kilix_game_host_options *options);
 
 /* Runs a fixed-step terminal host and always unwinds callbacks, terminal
- * modes, and signal handlers in reverse order. Returns EXIT_SUCCESS/FAILURE. */
+ * modes, and signal handlers in reverse order. Invalid arguments/options
+ * return EXIT_FAILURE without modifying host. */
 int kilix_game_host_run(kilix_game_host *host,
                         const kilix_game_host_options *options,
                         const kilix_game_host_callbacks *callbacks,

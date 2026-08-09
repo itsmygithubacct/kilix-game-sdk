@@ -49,8 +49,8 @@ bool kilix_game_data_root_from_executable(const char *environment_variable,
     /* Resolve relative to the running executable so the game finds its data
      * from any working directory: <exe_dir>/<local_subdir> for a build tree,
      * then <exe_dir>/<installed_subdir> for an installed layout. */
-    length = readlink("/proc/self/exe", executable, sizeof executable - 1u);
-    if (length > 0) {
+    length = readlink("/proc/self/exe", executable, sizeof executable);
+    if (length > 0 && (size_t)length < sizeof executable) {
         executable[length] = '\0';
         slash = strrchr(executable, '/');
         if (slash) {
@@ -176,6 +176,9 @@ bool kilix_game_audio_init(kilix_game_audio *audio,
     const kilix_game_audio_options *selected = options;
     size_t index;
     bool cue_seen[PCMMIX_BANK_CUES_MAX] = {false};
+    bool variant_seen[PCMMIX_BANK_CUES_MAX][PCMMIX_BANK_VARIANTS_MAX] = {
+        {false}
+    };
     if (error && error_size != 0u) error[0] = '\0';
     if (!audio) return false;
     if (!selected) {
@@ -185,6 +188,8 @@ bool kilix_game_audio_init(kilix_game_audio *audio,
     if (selected->cue_count == 0u ||
         selected->cue_count > PCMMIX_BANK_CUES_MAX ||
         (selected->cue_spec_count != 0u && !selected->cues) ||
+        selected->cue_spec_count >
+            (size_t)selected->cue_count * PCMMIX_BANK_VARIANTS_MAX ||
         (selected->scene_count != 0u && !selected->scenes)) {
         SET_ERROR(error, error_size, "invalid audio options");
         return false;
@@ -212,18 +217,12 @@ bool kilix_game_audio_init(kilix_game_audio *audio,
             SET_ERROR(error, error_size, "invalid cue spec %zu", index);
             goto fail;
         }
-        {
-            size_t previous;
-            for (previous = 0u; previous < index; ++previous) {
-                if (selected->cues[previous].cue == spec->cue &&
-                    selected->cues[previous].variant == spec->variant) {
-                    SET_ERROR(error, error_size,
-                              "duplicate cue %u variant %u", spec->cue,
-                              spec->variant);
-                    goto fail;
-                }
-            }
+        if (variant_seen[spec->cue][spec->variant]) {
+            SET_ERROR(error, error_size, "duplicate cue %u variant %u",
+                      spec->cue, spec->variant);
+            goto fail;
         }
+        variant_seen[spec->cue][spec->variant] = true;
         if (!kilix_game_data_resolve(&selected->data, spec->relative_path,
                                      path, sizeof path)) {
             if (!spec->required) continue;

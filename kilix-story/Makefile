@@ -7,11 +7,14 @@ CC ?= cc
 AR ?= ar
 INSTALL ?= install
 
-CPPFLAGS += -Iinclude
+override CPPFLAGS += -Iinclude
 WARNINGS := -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
 	-Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 CFLAGS ?= -O2 -g
-override CFLAGS += -std=c11 -fPIC $(WARNINGS)
+override CFLAGS += -std=c11 -fPIC $(WARNINGS) $(EXTRA_CFLAGS)
+override LDFLAGS += $(EXTRA_LDFLAGS)
+override LDLIBS += $(EXTRA_LDLIBS)
+DEPFLAGS := -MMD -MP
 
 OBJECT := $(BUILD_DIR)/kilix_story.o
 STATIC_LIB := $(BUILD_DIR)/lib$(PROJECT).a
@@ -26,16 +29,17 @@ $(BUILD_DIR):
 	mkdir -p $@
 
 $(OBJECT): src/kilix_story.c include/kilix_story.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(STATIC_LIB): $(OBJECT)
 	$(AR) rcs $@ $^
 
 $(SHARED_LIB): $(OBJECT)
-	$(CC) -shared $(LDFLAGS) $^ -o $@
+	$(CC) -shared $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 $(TEST): tests/test_story.c $(STATIC_LIB) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(STATIC_LIB) $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) $< $(STATIC_LIB) \
+		$(LDFLAGS) $(LDLIBS) -o $@
 
 test: $(TEST) test-make-fragment
 	$(TEST)
@@ -43,16 +47,20 @@ test: $(TEST) test-make-fragment
 test-make-fragment:
 	$(MAKE) -f tests/test_make_fragment.mk check-root
 
-sanitize: | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) \
-		-fno-omit-frame-pointer -fsanitize=address,undefined \
-		src/kilix_story.c tests/test_story.c \
-		-fsanitize=address,undefined -o $(BUILD_DIR)/test-story-sanitize
-	ASAN_OPTIONS=detect_leaks=1 $(BUILD_DIR)/test-story-sanitize
+SANITIZE_BUILD_DIR ?= $(BUILD_DIR)/sanitize
+sanitize:
+	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+		UBSAN_OPTIONS=halt_on_error=1 \
+		$(MAKE) --no-print-directory BUILD_DIR="$(SANITIZE_BUILD_DIR)" \
+		EXTRA_CFLAGS="-O1 -fno-omit-frame-pointer \
+		-fsanitize=address,undefined" \
+		EXTRA_LDFLAGS="-fsanitize=address,undefined" test
 
+CLANG_BUILD_DIR ?= $(BUILD_DIR)/clang
 test-clang:
-	$(MAKE) clean
-	$(MAKE) CC=clang CFLAGS="-O2 -g -Werror" test
+	$(MAKE) --no-print-directory BUILD_DIR="$(CLANG_BUILD_DIR)" clean
+	$(MAKE) --no-print-directory CC=clang \
+		BUILD_DIR="$(CLANG_BUILD_DIR)" EXTRA_CFLAGS="-Werror" test
 
 install: all
 	$(INSTALL) -d $(DESTDIR)$(PREFIX)/include $(DESTDIR)$(PREFIX)/lib
@@ -63,4 +71,4 @@ install: all
 clean:
 	rm -rf $(BUILD_DIR)
 
--include $(OBJECT:.o=.d)
+-include $(OBJECT:.o=.d) $(TEST).d

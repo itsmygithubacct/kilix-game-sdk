@@ -1,5 +1,7 @@
 #include "kilix_ui.h"
 
+#include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,18 +59,32 @@ int main(void)
     static const kilix_ui_command commands[1] = {
         {"1", "Attack", "", true}
     };
+    static const kilix_ui_inventory_item inventory[1] = {
+        {"Tonic", "Restores vitality.", 2, false, true}
+    };
+    static const kilix_ui_target targets[1] = {
+        {"Wisp", "Marked", 4.0f, 8.0f, true}
+    };
+    static const kilix_ui_shop_item shop[1] = {
+        {"Tonic", 12, 2, true}
+    };
     ki_td_rgba8 image = ki_td_rgba8_make(pixels, 3, 3);
     ki_td_nine_slice skin;
     ki_td_soft_renderer renderer = {0};
     ki_td_view view = {.logical_width = 160, .logical_height = 90,
                        .scale = 2.0f};
     kilix_ui_style style;
+    kilix_ui_style malformed;
     kilix_ui_focus focus;
     if (!ki_td_nine_slice_init(&skin, &image, 1, 1, 1, 1) ||
         !ki_td_soft_renderer_init(&renderer, 320, 180)) return EXIT_FAILURE;
     kilix_ui_style_init(&style);
     kilix_ui_focus_init(&focus, 2u, 2u);
     watching = 1;
+    kilix_ui_draw_panel(&renderer, &view, (ki_td_rect){2, 2, 60, 42},
+                        &style, &skin);
+    kilix_ui_draw_portrait(&renderer, &view, (ki_td_rect){4, 4, 12, 12},
+                           &image, 0.75f);
     kilix_ui_draw_list(&renderer, &view, (ki_td_rect){2, 2, 60, 42},
                        &style, &skin, &focus, items, NULL, 2u);
     kilix_ui_draw_dialogue(&renderer, &view,
@@ -83,6 +99,26 @@ int main(void)
     kilix_ui_draw_commands(&renderer, &view,
                            (ki_td_rect){2, 2, 60, 24},
                            &style, NULL, &focus, commands, 1u);
+    kilix_ui_draw_inventory(&renderer, &view,
+                            (ki_td_rect){2, 28, 60, 42},
+                            &style, NULL, &focus, inventory, 1u);
+    kilix_ui_draw_targets(&renderer, &view,
+                          (ki_td_rect){68, 2, 88, 42},
+                          &style, NULL, &focus, targets, 1u);
+    kilix_ui_draw_shop(&renderer, &view, (ki_td_rect){68, 46, 88, 42},
+                       &style, NULL, &focus, shop, 1u, "Gil", 20);
+    malformed = style;
+    malformed.padding = INT_MAX;
+    malformed.row_height = INT_MAX;
+    malformed.font_scale = INT_MAX;
+    malformed.panel_alpha = NAN;
+    kilix_ui_draw_party(&renderer, &view, (ki_td_rect){2, 2, 60, 42},
+                        &malformed, NULL, &focus, party, 1u);
+    view.scale = 0.0f;
+    kilix_ui_draw_list(&renderer, &view, (ki_td_rect){2, 2, 60, 42},
+                       &style, NULL, &focus, items, NULL, 2u);
+    kilix_ui_draw_portrait(&renderer, &view, (ki_td_rect){4, 4, 12, 12},
+                           &image, NAN);
     watching = 0;
     ki_td_soft_renderer_destroy(&renderer);
     if (operations != 0u) {

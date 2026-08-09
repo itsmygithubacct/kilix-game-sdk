@@ -12,8 +12,8 @@ extern "C" {
 #endif
 
 #define KILIX_UI_VERSION_MAJOR 0
-#define KILIX_UI_VERSION_MINOR 2
-#define KILIX_UI_VERSION_PATCH 1
+#define KILIX_UI_VERSION_MINOR 3
+#define KILIX_UI_VERSION_PATCH 0
 
 typedef enum kilix_ui_action {
     KILIX_UI_ACTION_NONE = 0,
@@ -37,6 +37,10 @@ typedef struct kilix_ui_focus {
     bool wrap;
 } kilix_ui_focus;
 
+/* Focus is caller-owned and must first be initialized.  A non-null enabled
+ * array contains item_count entries; null means every item is enabled.
+ * Movement skips disabled items, preserves a visible selected row, and never
+ * allocates.  ACCEPT reports eligibility without mutating focus. */
 void kilix_ui_focus_init(kilix_ui_focus *focus, size_t item_count,
                          size_t page_size);
 bool kilix_ui_focus_set_items(kilix_ui_focus *focus, size_t item_count,
@@ -59,6 +63,10 @@ typedef struct kilix_ui_style {
     float panel_alpha;
 } kilix_ui_style;
 
+/* Initializes the complete default theme.  Draw calls copy, normalize, and
+ * never mutate a supplied style: negative padding becomes zero, non-positive
+ * row height becomes the default, font scale is clamped to [1,8], and panel
+ * alpha is clamped to [0,1] (non-finite alpha becomes the default). */
 void kilix_ui_style_init(kilix_ui_style *style);
 
 typedef struct kilix_ui_prompt {
@@ -67,6 +75,21 @@ typedef struct kilix_ui_prompt {
     bool enabled;
 } kilix_ui_prompt;
 
+/*
+ * Drawing contract
+ * ----------------
+ * The renderer must have an initialized canvas and the view must have a
+ * finite positive scale.  Rectangles need positive dimensions and
+ * representable x+width/y+height edges.  Calls with invalid context, geometry,
+ * counted arrays, or required records are no-ops.  Every draw intersects and
+ * preserves the caller's active canvas clip.
+ *
+ * Strings, images, styles, focus records, and arrays remain caller-owned and
+ * are borrowed only for the call.  Drawing performs no allocation or I/O.
+ * Panel skins that are invalid or too large for the destination use the
+ * colored fallback.  Portrait alpha is clamped to [0,1]; non-finite alpha is
+ * a no-op.  Text work is bounded to glyphs that can intersect the active clip.
+ */
 void kilix_ui_draw_panel(ki_td_soft_renderer *renderer,
                          const ki_td_view *view, ki_td_rect rect,
                          const kilix_ui_style *style,
@@ -143,10 +166,8 @@ typedef struct kilix_ui_shop_item {
     bool enabled;
 } kilix_ui_shop_item;
 
-/*
- * Higher-level RPG composites borrow every string and perform no allocation.
- * Focus and all game semantics remain caller-owned.
- */
+/* Higher-level RPG composites follow the drawing contract above.  Focus and
+ * all inventory, economy, combat, and other game semantics remain caller-owned. */
 void kilix_ui_draw_party(ki_td_soft_renderer *renderer,
                          const ki_td_view *view, ki_td_rect rect,
                          const kilix_ui_style *style,

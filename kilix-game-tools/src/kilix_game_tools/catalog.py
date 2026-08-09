@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .common import ToolError
 
 
+GAME_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
 def validate_catalog(path: Path, game_id: str) -> tuple[str, str]:
-    if not game_id or "/" in game_id or game_id in (".", ".."):
+    if not isinstance(game_id, str) or GAME_ID.fullmatch(game_id) is None:
         raise ToolError("invalid game ID")
     try:
         from kilix_content import Catalog

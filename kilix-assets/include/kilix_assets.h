@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define KILIX_ASSETS_VERSION_MAJOR 0
-#define KILIX_ASSETS_VERSION_MINOR 1
+#define KILIX_ASSETS_VERSION_MINOR 2
 #define KILIX_ASSETS_VERSION_PATCH 0
 
 #define KILIX_ASSET_DEFAULT_MAX_FILE_BYTES (64u * 1024u * 1024u)
@@ -31,7 +31,8 @@ typedef enum kilix_asset_status {
 const char *kilix_asset_status_string(kilix_asset_status status);
 
 /* Paths accepted from manifests are relative and portable. Absolute paths,
- * empty components, backslashes, and `.`/`..` components are rejected. */
+ * empty components, backslashes, control bytes, DEL, and `.`/`..` components
+ * are rejected. This is lexical validation, not a filesystem sandbox. */
 bool kilix_asset_path_is_safe(const char *relative_path);
 
 typedef struct kilix_asset_locator {
@@ -42,8 +43,9 @@ typedef struct kilix_asset_locator {
 
 void kilix_asset_locator_init(kilix_asset_locator *locator);
 
-/* Resolves an existing file. The environment override wins, followed by the
- * source-tree root and installed root. Roots are borrowed from the caller. */
+/* Resolves an existing regular file. The environment override wins, followed
+ * by the source-tree root and installed root. Roots are borrowed from the
+ * caller, and destination is cleared on failure. */
 kilix_asset_status kilix_asset_resolve(const kilix_asset_locator *locator,
                                        const char *relative_path,
                                        char *destination,
@@ -57,7 +59,9 @@ typedef struct kilix_asset_limits {
 
 void kilix_asset_limits_init(kilix_asset_limits *limits);
 
-/* Owned, straight-alpha RGBA8 pixels. */
+/* Owned, straight-alpha RGBA8 pixels. Initialize images to zero before their
+ * first use and clear them once when finished. Loads are transactional: a
+ * failure leaves an existing image unchanged. */
 typedef struct kilix_asset_image {
     uint8_t *pixels;
     uint32_t width;
@@ -82,6 +86,7 @@ typedef struct kilix_asset_region {
     size_t stride;
 } kilix_asset_region;
 
+/* Regions borrow image/cache storage and do not own their pixels. */
 bool kilix_asset_region_is_valid(const kilix_asset_region *region);
 kilix_asset_region kilix_asset_image_region(const kilix_asset_image *image,
                                              uint32_t x, uint32_t y,
@@ -112,8 +117,11 @@ typedef struct kilix_asset_clip {
 bool kilix_asset_clip_is_valid(const kilix_asset_clip *clip);
 uint32_t kilix_asset_clip_frame(const kilix_asset_clip *clip, uint64_t tick);
 
-/* The cache owns loaded images. Returned image pointers remain valid until
- * clear; duplicate canonical path/format requests return the same image. */
+/* The cache owns loaded images. Initialize it once, serialize access to the
+ * same cache, and clear it once when finished. Returned image pointers remain
+ * stable until clear; duplicate identical path/format requests return the
+ * same image. max_bytes and byte_count cover decoded pixels, not metadata.
+ * Cache fields are observable state and must not be mutated by callers. */
 typedef struct kilix_asset_cache {
     void *entries;
     size_t entry_count;
@@ -154,7 +162,11 @@ typedef struct kilix_asset_manifest_bitmap {
 } kilix_asset_manifest_bitmap;
 
 /* Parser for the versioned Kilix graphics manifest schema. Unknown metadata
- * fields are skipped, while runtime atlas/bitmap records are strict. */
+ * fields are skipped, while runtime atlas/bitmap records are strict. Bitmap
+ * records accept either `png` plus `width`/`height`, or `path` plus a valid
+ * grid. Initialize manifests to zero; successful loads replace their owned
+ * data, while failed loads leave existing data unchanged. Serialize mutation
+ * of the same manifest. */
 typedef struct kilix_asset_manifest {
     uint32_t schema_version;
     char *game;

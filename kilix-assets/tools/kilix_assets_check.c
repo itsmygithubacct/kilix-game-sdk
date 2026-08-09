@@ -57,6 +57,7 @@ int main(int argc, char **argv)
     kilix_asset_locator locator;
     kilix_asset_cache cache;
     kilix_asset_status status;
+    size_t cache_entries;
     size_t index;
     bool valid = true;
     if (argc != 3) {
@@ -73,8 +74,13 @@ int main(int argc, char **argv)
     kilix_asset_locator_init(&locator);
     locator.source_root = argv[2];
     locator.installed_root = NULL;
-    if (!kilix_asset_cache_init(&cache,
-            manifest.atlas_count + manifest.bitmap_count + 1u,
+    if (manifest.atlas_count > SIZE_MAX - manifest.bitmap_count ||
+        manifest.atlas_count + manifest.bitmap_count == SIZE_MAX) {
+        kilix_asset_manifest_clear(&manifest);
+        return EXIT_FAILURE;
+    }
+    cache_entries = manifest.atlas_count + manifest.bitmap_count + 1u;
+    if (!kilix_asset_cache_init(&cache, cache_entries,
             512u * 1024u * 1024u)) {
         kilix_asset_manifest_clear(&manifest);
         return EXIT_FAILURE;
@@ -85,8 +91,11 @@ int main(int argc, char **argv)
         kilix_asset_atlas atlas;
         if (!check_image(&cache, &locator, entry->id, entry->path,
                          entry->width, entry->height, entry->alpha_required,
-                         &image) ||
-            !kilix_asset_atlas_init_grid(&atlas, image, entry->columns,
+                         &image)) {
+            valid = false;
+            continue;
+        }
+        if (!kilix_asset_atlas_init_grid(&atlas, image, entry->columns,
                                          entry->rows)) {
             (void)fprintf(stderr, "%s: invalid atlas grid\n", entry->id);
             valid = false;

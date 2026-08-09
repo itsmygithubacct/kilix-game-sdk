@@ -69,18 +69,31 @@ kt_map_init(&map, W, H, D, cells, W * H * D);
 kt_map_validate(&map);          /* also measures elevation_span */
 
 kt_nav_node nodes[W * H * D];
-uint32_t    heap[/* see below */];
+uint32_t    heap[W * H * D];
+uint32_t    heap_pos[W * H * D];
+
+kt_nav_workspace_init_indexed(&workspace, nodes, W * H * D,
+                              heap, W * H * D,
+                              heap_pos, W * H * D);
 ```
 
-Heap sizing depends on the ordering discipline:
+Heap sizing does **not** depend on the ordering discipline. Both keep exactly
+one heap entry per node and reposition it when a cell is improved, so both need:
 
-- `KT_NAV_ORDER_SEQUENCE` (default) pushes a lazy duplicate per improving
-  relaxation, so it needs `kt_nav_required_heap(map)` slots — one per
-  predecessor per cell. Sizing it to the cell count overflows and surfaces as a
-  spurious "no route".
-- `KT_NAV_ORDER_DECREASE_KEY` keeps one entry per node and needs only one slot
-  per cell, plus a position index bound through
+- `kt_nav_required_heap(map)` heap slots, which is one per cell, and
+- a position index of the same size, bound through
   `kt_nav_workspace_init_indexed()`.
+
+The position index is **required by both orderings**, not just by
+`KT_NAV_ORDER_DECREASE_KEY`. `kt_nav_workspace_init()` is a convenience that
+leaves it unset; a search on a workspace bound that way returns
+`KT_ERR_CAPACITY` rather than a route, whichever ordering is selected.
+
+Queueing a lazy duplicate per improving relaxation instead — and sizing the
+heap for it — is not an option here, and no ordering does it. A heap entry
+stores only a cell index and the comparator reads the node's *current* cost,
+so improving an open node mutates the key of every entry naming it and breaks
+the heap invariant with no re-sift.
 
 ## Reproducing an existing game's behaviour
 

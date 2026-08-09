@@ -9,14 +9,42 @@
  */
 #include "kilix_tactics_projection.h"
 
+/*
+ * Every projection input is reduced to int64 before it is combined, and the
+ * extents that multiply it are bounded at init (KT_PROJECTION_MAX_EXTENT).
+ * With |view| <= 2^32, |extent| <= 2^16 and zoom <= 65535, the widest
+ * intermediate is below 2^60, so the arithmetic below cannot overflow int64;
+ * only the final narrowing back to int32 needs a range test.
+ */
+static bool kt_fits_i32(int64_t value)
+{
+    return value >= (int64_t)INT32_MIN && value <= (int64_t)INT32_MAX;
+}
+
+/*
+ * kt_projection is a public struct, and a game that restores a saved view
+ * writes its fields directly rather than calling kt_projection_init(). The
+ * bound checked at init is only load-bearing if the transform re-checks it,
+ * so every arithmetic entry point confirms it before multiplying by an
+ * extent.
+ */
+static bool kt_projection_extent_ok(const kt_projection *projection)
+{
+    return projection->tile_width > 0 && projection->tile_height > 0 &&
+           projection->level_step >= 0 &&
+           projection->tile_width <= KT_PROJECTION_MAX_EXTENT &&
+           projection->tile_height <= KT_PROJECTION_MAX_EXTENT &&
+           projection->level_step <= KT_PROJECTION_MAX_EXTENT;
+}
+
 /* Round half away from zero, matching KAT's kat_scale_projection exactly.
  * At 100 percent this is the identity on every input. */
-static int32_t kt_scale_zoom(int64_t value, uint16_t zoom_percent)
+static int64_t kt_scale_zoom(int64_t value, uint16_t zoom_percent)
 {
     int64_t scaled;
 
     if (zoom_percent == 100u) {
-        return (int32_t)value;
+        return value;
     }
     scaled = value * (int64_t)zoom_percent;
     if (scaled >= 0) {
@@ -24,7 +52,28 @@ static int32_t kt_scale_zoom(int64_t value, uint16_t zoom_percent)
     } else {
         scaled -= 50;
     }
-    return (int32_t)(scaled / 100);
+    return scaled / 100;
+}
+
+/*
+ * Apply the camera origin and narrow to screen space. The origin is caller
+ * data and the scaled value is unbounded in principle, so a result that does
+ * not fit a screen point is reported rather than wrapped.
+ */
+static kt_status kt_screen_from_raw(const kt_camera *camera, int64_t raw_x,
+                                    int64_t raw_y, kt_screen_point *out)
+{
+    int64_t x = (int64_t)camera->origin_x +
+                kt_scale_zoom(raw_x, camera->zoom_percent);
+    int64_t y = (int64_t)camera->origin_y +
+                kt_scale_zoom(raw_y, camera->zoom_percent);
+
+    if (!kt_fits_i32(x) || !kt_fits_i32(y)) {
+        return KT_ERR_RANGE;
+    }
+    out->x = (int32_t)x;
+    out->y = (int32_t)y;
+    return KT_OK;
 }
 
 /* Floor division; C truncates toward zero, which would fold the two cells
@@ -51,6 +100,18 @@ kt_status kt_projection_init(kt_projection *projection, int32_t tile_width,
         return KT_ERR_ARGUMENT;
     }
     if (tile_width <= 0 || tile_height <= 0 || level_step < 0) {
+        return KT_ERR_RANGE;
+    }
+    /*
+     * Bounding the extents is what keeps the projection arithmetic inside
+     * int64 for the whole int32 input domain, and every real consumer is
+     * three orders of magnitude below the limit (both games use 32/16 with a
+     * 12 or 24 pixel level step). Without it a caller-chosen extent near
+     * INT32_MAX overflows the picking diamond test and the zoom scale.
+     */
+    if (tile_width > KT_PROJECTION_MAX_EXTENT ||
+        tile_height > KT_PROJECTION_MAX_EXTENT ||
+        level_step > KT_PROJECTION_MAX_EXTENT) {
         return KT_ERR_RANGE;
     }
     /* The transform halves both extents; an odd extent would silently drop
@@ -83,27 +144,45 @@ void kt_camera_init(kt_camera *camera)
  *   r1: (y, W-1-x)   r2: (W-1-x, H-1-y)   r3: (H-1-y, x)
  * The clockwise sense used by KAT is the same table read as (4 - r) & 3.
  */
-static void kt_rotate_ccw(int32_t width, int32_t height, uint8_t rotation,
+/*
+ * Reports false when the reflected coordinate is not representable. The
+ * reflection `extent - 1 - v` is exact in int64 for every int32 input, so the
+ * only failure is a result outside int32, which happens for positions far
+ * outside the extent -- a domain the map-free entry point deliberately
+ * accepts.
+ */
+static bool kt_rotate_ccw(int32_t width, int32_t height, uint8_t rotation,
                           int32_t x, int32_t y, int32_t *out_x, int32_t *out_y)
 {
+    int64_t wide_x = (int64_t)x;
+    int64_t wide_y = (int64_t)y;
+    int64_t rx;
+    int64_t ry;
+
     switch (rotation & 3u) {
     case 1u:
-        *out_x = y;
-        *out_y = width - 1 - x;
+        rx = wide_y;
+        ry = (int64_t)width - 1 - wide_x;
         break;
     case 2u:
-        *out_x = width - 1 - x;
-        *out_y = height - 1 - y;
+        rx = (int64_t)width - 1 - wide_x;
+        ry = (int64_t)height - 1 - wide_y;
         break;
     case 3u:
-        *out_x = height - 1 - y;
-        *out_y = x;
+        rx = (int64_t)height - 1 - wide_y;
+        ry = wide_x;
         break;
     default:
-        *out_x = x;
-        *out_y = y;
+        rx = wide_x;
+        ry = wide_y;
         break;
     }
+    if (!kt_fits_i32(rx) || !kt_fits_i32(ry)) {
+        return false;
+    }
+    *out_x = (int32_t)rx;
+    *out_y = (int32_t)ry;
+    return true;
 }
 
 static uint8_t kt_effective_rotation(const kt_projection *projection,
@@ -129,8 +208,10 @@ kt_status kt_rotate_extent(const kt_projection *projection,
     if (width <= 0 || height <= 0) {
         return KT_ERR_RANGE;
     }
-    kt_rotate_ccw(width, height, kt_effective_rotation(projection, camera), x,
-                  y, out_x, out_y);
+    if (!kt_rotate_ccw(width, height, kt_effective_rotation(projection, camera),
+                       x, y, out_x, out_y)) {
+        return KT_ERR_RANGE;
+    }
     return KT_OK;
 }
 
@@ -153,11 +234,15 @@ kt_status kt_rotate_extent_inverse(const kt_projection *projection,
      * swapped extent. */
     rotation = kt_effective_rotation(projection, camera);
     if ((rotation & 1u) != 0u) {
-        kt_rotate_ccw(height, width, (uint8_t)((4u - rotation) & 3u), view_x,
-                      view_y, out_x, out_y);
+        if (!kt_rotate_ccw(height, width, (uint8_t)((4u - rotation) & 3u),
+                           view_x, view_y, out_x, out_y)) {
+            return KT_ERR_RANGE;
+        }
     } else {
-        kt_rotate_ccw(width, height, (uint8_t)((4u - rotation) & 3u), view_x,
-                      view_y, out_x, out_y);
+        if (!kt_rotate_ccw(width, height, (uint8_t)((4u - rotation) & 3u),
+                           view_x, view_y, out_x, out_y)) {
+            return KT_ERR_RANGE;
+        }
     }
     return KT_OK;
 }
@@ -198,10 +283,19 @@ kt_status kt_rotate_to_world(const kt_map *map, const kt_projection *projection,
         return KT_ERR_ARGUMENT;
     }
     /* The inverse of a quarter turn is the complementary quarter turn taken
-     * over the swapped extent. */
-    if (kt_rotate_extent_inverse(projection, camera, map->width, map->height,
-                                 view.x, view.y, &wx, &wy) != KT_OK) {
-        return KT_ERR_STATE;
+     * over the swapped extent. A view position far enough outside the grid
+     * that its reflection leaves int32 is out of range, not a broken state. */
+    {
+        kt_status rotated = kt_rotate_extent_inverse(
+            projection, camera, map->width, map->height, view.x, view.y, &wx,
+            &wy);
+
+        if (rotated == KT_ERR_RANGE) {
+            return KT_ERR_RANGE;
+        }
+        if (rotated != KT_OK) {
+            return KT_ERR_STATE;
+        }
     }
     out_world->x = wx;
     out_world->y = wy;
@@ -228,14 +322,15 @@ kt_status kt_project_subcell(const kt_projection *projection,
     if (camera->zoom_percent == 0u) {
         return KT_ERR_RANGE;
     }
+    if (!kt_projection_extent_ok(projection)) {
+        return KT_ERR_STATE;
+    }
     half_w = projection->tile_width / 2;
     half_h = projection->tile_height / 2;
     raw_x = ((int64_t)view_x_16 - (int64_t)view_y_16) * half_w / 16;
     raw_y = ((int64_t)view_x_16 + (int64_t)view_y_16) * half_h / 16 -
             (int64_t)height_16 * (int64_t)projection->level_step / 16;
-    out->x = camera->origin_x + kt_scale_zoom(raw_x, camera->zoom_percent);
-    out->y = camera->origin_y + kt_scale_zoom(raw_y, camera->zoom_percent);
-    return KT_OK;
+    return kt_screen_from_raw(camera, raw_x, raw_y, out);
 }
 
 kt_status kt_project(const kt_map *map, const kt_projection *projection,
@@ -265,15 +360,16 @@ kt_status kt_project(const kt_map *map, const kt_projection *projection,
     if (cell == NULL) {
         return KT_ERR_RANGE;
     }
+    if (!kt_projection_extent_ok(projection)) {
+        return KT_ERR_STATE;
+    }
     half_w = projection->tile_width / 2;
     half_h = projection->tile_height / 2;
     height = (int64_t)world.z + (int64_t)cell->elevation;
     raw_x = ((int64_t)view.x - (int64_t)view.y) * half_w;
     raw_y = ((int64_t)view.x + (int64_t)view.y) * half_h -
             height * (int64_t)projection->level_step;
-    out->x = camera->origin_x + kt_scale_zoom(raw_x, camera->zoom_percent);
-    out->y = camera->origin_y + kt_scale_zoom(raw_y, camera->zoom_percent);
-    return KT_OK;
+    return kt_screen_from_raw(camera, raw_x, raw_y, out);
 }
 
 /*
@@ -294,6 +390,9 @@ static kt_status kt_unproject_view(const kt_projection *projection,
     int64_t sum;
     int64_t difference;
 
+    if (!kt_projection_extent_ok(projection)) {
+        return KT_ERR_STATE;
+    }
     half_w = projection->tile_width / 2;
     half_h = projection->tile_height / 2;
     if (half_w == 0 || half_h == 0) {
@@ -505,6 +604,18 @@ static kt_status kt_pick_sweep(const kt_map *map,
                 }
                 if (dy < 0) {
                     dy = -dy;
+                }
+                /*
+                 * The diamond test is |dx|/half_w + |dy|/half_h <= 1 cleared
+                 * of division. Both distances are differences of screen
+                 * points, so each is at most 2^32, and the extent bound caps
+                 * the zoomed half-extents; the products below therefore stay
+                 * inside int64. A point further away than the half-extent on
+                 * either axis is outside the diamond by inspection, which
+                 * also keeps the cheap rejection first.
+                 */
+                if (dx > half_w || dy > half_h) {
+                    continue;
                 }
                 if (dx * half_h + dy * half_w > half_w * half_h) {
                     continue;

@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define KILIX_STORY_VERSION_MAJOR 0
-#define KILIX_STORY_VERSION_MINOR 1
+#define KILIX_STORY_VERSION_MINOR 2
 #define KILIX_STORY_VERSION_PATCH 0
 #define KILIX_STORY_END UINT32_MAX
 
@@ -39,6 +39,11 @@ typedef struct kilix_story_state {
     size_t counter_count;
 } kilix_story_state;
 
+/*
+ * Bind caller-owned storage. Non-empty flag and counter buffers, and the
+ * state object itself, must occupy disjoint byte ranges. A failed bind leaves
+ * the existing state object unchanged.
+ */
 kilix_story_result kilix_story_state_bind(
     kilix_story_state *state, uint64_t *flag_words, size_t flag_word_count,
     int32_t *counters, size_t counter_count);
@@ -71,6 +76,11 @@ typedef struct kilix_story_condition {
     int32_t maximum;
 } kilix_story_condition;
 
+/*
+ * Evaluate every condition so malformed entries are reported even after the
+ * truth value is known. ALL over an empty list is true; ANY is false. Failure
+ * leaves matches unchanged.
+ */
 kilix_story_result kilix_story_conditions_all(
     const kilix_story_state *state, const kilix_story_condition *conditions,
     size_t condition_count, bool *matches);
@@ -93,8 +103,9 @@ typedef struct kilix_story_action {
 } kilix_story_action;
 
 /*
- * Validate the entire sequence before changing state. Counter overflow or an
- * invalid index leaves every flag and counter untouched.
+ * Validate the entire sequence before changing state. Counter overflow, an
+ * invalid operation, or an invalid index leaves every flag and counter
+ * untouched.
  */
 kilix_story_result kilix_story_apply_actions(
     kilix_story_state *state, const kilix_story_action *actions,
@@ -123,6 +134,11 @@ typedef struct kilix_story_graph {
     size_t node_count;
 } kilix_story_graph;
 
+/*
+ * Validate graph structure, operation kinds, ranges, unique node IDs, and
+ * links. Cycles are valid. Numeric state indices are checked later by
+ * kilix_story_session_start because a graph is independent of state size.
+ */
 kilix_story_result kilix_story_graph_validate(
     const kilix_story_graph *graph);
 const kilix_story_node *kilix_story_find_node(
@@ -143,6 +159,12 @@ typedef struct kilix_story_event {
     bool ended;
 } kilix_story_event;
 
+/*
+ * Validate the complete graph against state before starting. Failure leaves
+ * session unchanged; an incompatible flag or counter index returns
+ * KILIX_STORY_OUT_OF_RANGE. The graph and its borrowed tables must remain
+ * immutable and alive until the session stops or ends.
+ */
 kilix_story_result kilix_story_session_start(
     kilix_story_session *session, const kilix_story_graph *graph,
     kilix_story_state *state, uint32_t first_node);

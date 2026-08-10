@@ -4,7 +4,7 @@ This component is maintained in [`kilix-game-sdk`](..). Games pin the SDK,
 not this directory as a separate repository.
 
 `kilix-story` is a small, game-rule-free C11 runtime for story state,
-conditions, transactional actions, and bounded dialogue traversal.
+conditions, transactional actions, and validated dialogue traversal.
 
 It provides:
 
@@ -60,6 +60,32 @@ handle_story_event(event.event);
 Content compilers can emit these tables from game-specific schemas. The
 compiler and authored schema remain outside this runtime so different games
 can keep distinct dialogue and quest semantics.
+
+## Runtime contracts
+
+The state object, flag words, and counters are caller-owned and must occupy
+disjoint byte ranges. Binding is transactional, and zero-length buffers may be
+null. Independent state and session objects may be used concurrently, but the
+caller must serialize access to the same object.
+
+Condition lists are fully validated even when their truth value is already
+known. `all` over an empty list is true and `any` over an empty list is false.
+If evaluation fails, the output boolean is unchanged. Action lists are also
+fully validated before mutation; invalid operations, invalid indices, and
+counter overflow leave all state unchanged.
+
+Graph validation checks non-empty node tables, unique IDs, required text and
+choice labels, condition/action definitions, and every non-terminal link.
+Cycles and self-links are allowed. A graph does not prescribe state capacity,
+so session start separately checks every referenced flag and counter index
+against the bound state. Failed session starts leave the prior session
+unchanged.
+
+Graphs, nodes, choices, condition/action arrays, and strings are borrowed and
+must remain immutable and alive while a session uses them. The runtime does
+no allocation or I/O. Validation selects bounded linear or stack-indexed
+paths by input size; oversized inputs retain an exact allocation-free
+fallback.
 
 ## License
 

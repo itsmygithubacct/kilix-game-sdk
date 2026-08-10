@@ -3,6 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 soft_raster=${SOFT_RASTER_DIR:-"$root/../kilix-game-kit/third_party/soft-raster"}
+soft_raster_build=${SOFT_RASTER_BUILD_DIR:-"$soft_raster/build"}
 scratch=$(mktemp -d /tmp/kilix-top-down-install.XXXXXX)
 cleanup()
 {
@@ -12,8 +13,9 @@ trap cleanup EXIT HUP INT TERM
 
 prefix=/opt/kilix
 make -C "$root" SOFT_RASTER_DIR="$soft_raster" \
+    SOFT_RASTER_BUILD_DIR="$soft_raster_build" \
     DESTDIR="$scratch" PREFIX="$prefix" install >/dev/null
-make -C "$soft_raster" DESTDIR="$scratch" \
+make -C "$soft_raster" BUILD_DIR="$soft_raster_build" DESTDIR="$scratch" \
     PREFIX="$prefix" install >/dev/null
 
 cat >"$scratch/consumer.c" <<'EOF'

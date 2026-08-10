@@ -82,13 +82,17 @@ typedef struct ki_td_sprite_command {
 } ki_td_sprite_command;
 
 /* Writes stable draw indices into caller-owned scratch and performs no
- * allocation. Returns zero when count exceeds scratch_count. */
+ * allocation. scratch must hold count indices and must not overlap commands.
+ * Returns count on success (including zero), or zero for a non-empty invalid
+ * request. Already ordered input is linear; larger unordered sets use an
+ * allocation-free O(n log n) path. */
 size_t ki_td_sprite_order(const ki_td_sprite_command *commands, size_t count,
                           size_t *scratch, size_t scratch_count);
 
-/* A renderer must be zero-initialized before its first init/resize/destroy.
- * Resize is transactional: failure preserves the active canvas and RGBA
- * buffer. Drawing performs no allocation. */
+/* A renderer must be zero-initialized before its first init, resize, or
+ * destroy. Init replaces any current state; resize is transactional, so
+ * failure preserves the active canvas and RGBA buffer. Drawing performs no
+ * allocation. Canvas accessors return borrowed pointers owned by renderer. */
 bool ki_td_soft_renderer_init(ki_td_soft_renderer *renderer, int width,
                               int height);
 bool ki_td_soft_renderer_resize(ki_td_soft_renderer *renderer, int width,
@@ -100,6 +104,10 @@ int ki_td_soft_width(const ki_td_soft_renderer *renderer);
 int ki_td_soft_height(const ki_td_soft_renderer *renderer);
 uint8_t *ki_td_soft_pack_rgba(ki_td_soft_renderer *renderer);
 
+/* Drawing requires a live renderer and, for logical-space calls, a finite,
+ * representable view. Invalid or unrepresentable geometry draws nothing.
+ * Alpha above 1 is clamped to 1; non-finite or non-positive alpha draws
+ * nothing. All drawing is clipped to the canvas's current clip rectangle. */
 void ki_td_soft_clear(ki_td_soft_renderer *renderer, uint32_t rgb);
 void ki_td_soft_blend_pixel(ki_td_soft_renderer *renderer, int x, int y,
                             uint32_t rgb, float alpha);
@@ -162,6 +170,8 @@ void ki_td_soft_nine_slice(ki_td_soft_renderer *renderer,
 void ki_td_soft_tile_batch(ki_td_soft_renderer *renderer,
                            const ki_td_view *view,
                            const ki_td_tile_batch *batch);
+/* scratch follows the same capacity and non-overlap contract as
+ * ki_td_sprite_order. Invalid individual commands are skipped. */
 void ki_td_soft_sprite_layers(ki_td_soft_renderer *renderer,
                               const ki_td_view *view,
                               const ki_td_sprite_command *commands,

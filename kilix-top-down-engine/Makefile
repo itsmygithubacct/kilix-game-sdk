@@ -3,20 +3,29 @@ BUILD_DIR ?= build
 PREFIX ?= /usr/local
 DESTDIR ?=
 SOFT_RASTER_DIR ?= ../kilix-game-kit/third_party/soft-raster
+SOFT_RASTER_BUILD_DIR ?= $(abspath $(SOFT_RASTER_DIR)/build)
 KILIX_GAME_KIT_ROOT ?= ../kilix-game-kit
 
 CC ?= cc
 AR ?= ar
 NM ?= nm
 INSTALL ?= install
+ARFLAGS := rcs
 
-CPPFLAGS += -Iinclude -I$(SOFT_RASTER_DIR)/include
+EXTRA_CPPFLAGS ?=
+EXTRA_CFLAGS ?=
+EXTRA_LDFLAGS ?=
+EXTRA_LDLIBS ?=
+
+INCLUDES := -Iinclude -I$(SOFT_RASTER_DIR)/include
+override CPPFLAGS += $(INCLUDES) $(EXTRA_CPPFLAGS)
 WARNINGS := \
 	-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow \
 	-Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 CFLAGS ?= -O2 -g
-override CFLAGS += -std=c11 -fPIC $(WARNINGS) -MMD -MP
-LDLIBS := -lm
+override CFLAGS += -std=c11 -fPIC $(WARNINGS) -MMD -MP $(EXTRA_CFLAGS)
+override LDFLAGS += $(EXTRA_LDFLAGS)
+override LDLIBS += -lm $(EXTRA_LDLIBS)
 
 CORE_SOURCES := src/view.c
 SOFT_SOURCES := src/soft.c
@@ -25,7 +34,7 @@ SOFT_OBJECTS := $(SOFT_SOURCES:src/%.c=$(BUILD_DIR)/obj/soft/%.o)
 CORE_LIB := $(BUILD_DIR)/lib$(PROJECT)-core.a
 SOFT_LIB := $(BUILD_DIR)/lib$(PROJECT)-soft.a
 LIBS := $(SOFT_LIB) $(CORE_LIB)
-SOFT_RASTER_LIB := $(SOFT_RASTER_DIR)/build/libsoft-raster.a
+SOFT_RASTER_LIB := $(SOFT_RASTER_BUILD_DIR)/libsoft-raster.a
 
 PUBLIC_HEADERS := \
 	include/kilix_top_down.h \
@@ -42,7 +51,7 @@ BENCH_BIN := $(BUILD_DIR)/benchmark
 INTEGRATION_BIN := $(BUILD_DIR)/game-kit-integration
 PKG_CONFIG_FILE := $(BUILD_DIR)/kilix-top-down-engine.pc
 
-.PHONY: all clean install test test-c test-noalloc test-deps test-integration \
+.PHONY: all analyze clean install test test-c test-noalloc test-deps test-integration \
 	test-headers test-install test-clang sanitize golden benchmark \
 	release-gate FORCE
 
@@ -51,20 +60,21 @@ all: $(CORE_LIB) $(SOFT_LIB) $(EXAMPLE_BIN)
 $(BUILD_DIR)/obj/core $(BUILD_DIR)/obj/soft:
 	mkdir -p $@
 
-$(BUILD_DIR)/obj/core/%.o: src/%.c $(CORE_PUBLIC_HEADERS) Makefile | $(BUILD_DIR)/obj/core
+$(BUILD_DIR)/obj/core/%.o: src/%.c src/internal.h $(CORE_PUBLIC_HEADERS) Makefile | $(BUILD_DIR)/obj/core
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/obj/soft/%.o: src/%.c $(PUBLIC_HEADERS) Makefile | $(BUILD_DIR)/obj/soft
+$(BUILD_DIR)/obj/soft/%.o: src/%.c src/internal.h $(PUBLIC_HEADERS) Makefile | $(BUILD_DIR)/obj/soft
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(CORE_LIB): $(CORE_OBJECTS)
-	$(AR) rcs $@ $^
+	$(AR) $(ARFLAGS) $@ $^
 
 $(SOFT_LIB): $(SOFT_OBJECTS)
-	$(AR) rcs $@ $^
+	$(AR) $(ARFLAGS) $@ $^
 
 $(SOFT_RASTER_LIB):
-	$(MAKE) -C $(SOFT_RASTER_DIR) build/libsoft-raster.a
+	$(MAKE) -C $(SOFT_RASTER_DIR) \
+		BUILD_DIR=$(SOFT_RASTER_BUILD_DIR) $(SOFT_RASTER_LIB)
 
 $(TEST_BIN): tests/test_top_down.c $(LIBS) $(SOFT_RASTER_LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBS) $(SOFT_RASTER_LIB) \
@@ -92,8 +102,9 @@ test-noalloc: $(NOALLOC_BIN)
 test: test-c test-noalloc golden
 
 test-deps:
-	$(MAKE) -C $(SOFT_RASTER_DIR) test
-	tools/check-submodules.sh
+	$(MAKE) -C $(SOFT_RASTER_DIR) \
+		BUILD_DIR=$(SOFT_RASTER_BUILD_DIR) test
+	tools/check-submodules.sh "$(abspath $(SOFT_RASTER_DIR))"
 
 ifneq ($(wildcard $(KILIX_GAME_KIT_ROOT)/mk/game-kit.mk),)
 include $(KILIX_GAME_KIT_ROOT)/mk/game-kit.mk
@@ -101,7 +112,8 @@ include $(KILIX_GAME_KIT_ROOT)/mk/game-kit.mk
 $(INTEGRATION_BIN): tests/game_kit_integration.c $(LIBS) $(KILIX_GAME_KIT_LIB)
 	$(CC) $(CPPFLAGS) $(KILIX_GAME_KIT_CPPFLAGS) \
 		-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE $(CFLAGS) $< \
-		$(LIBS) $(KILIX_GAME_KIT_LIB) $(KILIX_GAME_KIT_LDLIBS) -o $@
+		$(LIBS) $(KILIX_GAME_KIT_LIB) $(LDFLAGS) \
+		$(KILIX_GAME_KIT_LDLIBS) $(LDLIBS) -o $@
 
 test-integration: $(INTEGRATION_BIN)
 	$(INTEGRATION_BIN)
@@ -135,7 +147,9 @@ install: $(LIBS) $(PKG_CONFIG_FILE)
 		$(DESTDIR)$(PREFIX)/lib/pkgconfig/kilix-top-down-engine.pc
 
 test-install: $(LIBS) $(PKG_CONFIG_FILE)
-	SOFT_RASTER_DIR="$(abspath $(SOFT_RASTER_DIR))" tests/test_install.sh
+	SOFT_RASTER_DIR="$(abspath $(SOFT_RASTER_DIR))" \
+	SOFT_RASTER_BUILD_DIR="$(SOFT_RASTER_BUILD_DIR)" \
+		tests/test_install.sh
 
 sanitize:
 	mkdir -p $(BUILD_DIR)
@@ -143,9 +157,11 @@ sanitize:
 		-fno-omit-frame-pointer -fsanitize=address,undefined \
 		$(CORE_SOURCES) $(SOFT_SOURCES) tests/test_top_down.c \
 		$(SOFT_RASTER_DIR)/src/soft_raster.c \
-		-fsanitize=address,undefined $(LDLIBS) \
+		$(LDFLAGS) -fsanitize=address,undefined $(LDLIBS) \
 		-o $(BUILD_DIR)/test-kilix-top-down-sanitize
-	ASAN_OPTIONS=detect_leaks=1 $(BUILD_DIR)/test-kilix-top-down-sanitize
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+		$(BUILD_DIR)/test-kilix-top-down-sanitize
 
 test-clang:
 	@command -v clang >/dev/null || { \
@@ -162,6 +178,10 @@ golden: $(EXAMPLE_BIN)
 
 benchmark: $(BENCH_BIN)
 	$(BENCH_BIN)
+
+analyze:
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fanalyzer -fsyntax-only \
+		$(CORE_SOURCES) $(SOFT_SOURCES)
 
 release-gate: all test sanitize test-deps test-integration test-headers \
 	test-install test-clang benchmark

@@ -1,4 +1,5 @@
 #include "kilix_top_down_view.h"
+#include "internal.h"
 
 #include <limits.h>
 #include <math.h>
@@ -6,17 +7,10 @@
 
 static bool rect_is_valid(ki_td_rect rect)
 {
-    return rect.width > 0 && rect.height > 0;
-}
-
-static bool finite_float_to_int(float value, int *result)
-{
-    if (!result || !isfinite(value) ||
-        (double)value < (double)INT_MIN ||
-        (double)value > (double)INT_MAX)
-        return false;
-    *result = (int)value;
-    return true;
+    int64_t right = (int64_t)rect.x + rect.width;
+    int64_t bottom = (int64_t)rect.y + rect.height;
+    return rect.width > 0 && rect.height > 0 && right <= INT_MAX &&
+           bottom <= INT_MAX;
 }
 
 bool ki_td_fit_spec_init(ki_td_fit_spec *spec, int logical_width,
@@ -84,8 +78,8 @@ bool ki_td_view_fit(ki_td_view *view, const ki_td_fit_spec *spec)
     int centered_y_int;
     int64_t origin_x;
     int64_t origin_y;
-    if (!finite_float_to_int(centered_x, &centered_x_int) ||
-        !finite_float_to_int(centered_y, &centered_y_int))
+    if (!ki_td_internal_float_to_int(centered_x, &centered_x_int) ||
+        !ki_td_internal_float_to_int(centered_y, &centered_y_int))
         return false;
     origin_x = (int64_t)spec->align_bounds.x + (int64_t)centered_x_int;
     origin_y = (int64_t)spec->align_bounds.y + (int64_t)centered_y_int;
@@ -101,6 +95,16 @@ bool ki_td_view_fit(ki_td_view *view, const ki_td_fit_spec *spec)
         next.origin_x = spec->align_bounds.x;
     if (spec->clamp_origin_y && next.origin_y < spec->align_bounds.y)
         next.origin_y = spec->align_bounds.y;
+    {
+        int edge;
+        if (!ki_td_internal_screen_x(&next, 0.0f, &edge) ||
+            !ki_td_internal_screen_y(&next, 0.0f, &edge) ||
+            !ki_td_internal_screen_x(
+                &next, (float)next.logical_width, &edge) ||
+            !ki_td_internal_screen_y(
+                &next, (float)next.logical_height, &edge))
+            return false;
+    }
     *view = next;
     return true;
 }
@@ -112,45 +116,23 @@ void ki_td_view_set_offset(ki_td_view *view, int x, int y)
     view->offset_y = y;
 }
 
-static int screen_coordinate(const ki_td_view *view, float logical,
-                             int origin, int offset)
-{
-    float scaled;
-    float rounded;
-    int logical_pixels;
-    int64_t screen;
-    if (!view || !isfinite(logical) || !isfinite(view->scale) ||
-        view->scale <= 0.0f)
-        return 0;
-    scaled = logical * view->scale;
-    if (!isfinite(scaled)) return 0;
-    rounded = floorf(scaled + 0.5f);
-    if (!finite_float_to_int(rounded, &logical_pixels)) return 0;
-    screen = (int64_t)origin + (int64_t)offset +
-             (int64_t)logical_pixels;
-    return screen < INT_MIN || screen > INT_MAX ? 0 : (int)screen;
-}
-
 int ki_td_screen_x(const ki_td_view *view, float logical_x)
 {
-    return view ? screen_coordinate(
-                      view, logical_x, view->origin_x, view->offset_x) : 0;
+    int result;
+    return ki_td_internal_screen_x(view, logical_x, &result) ? result : 0;
 }
 
 int ki_td_screen_y(const ki_td_view *view, float logical_y)
 {
-    return view ? screen_coordinate(
-                      view, logical_y, view->origin_y, view->offset_y) : 0;
+    int result;
+    return ki_td_internal_screen_y(view, logical_y, &result) ? result : 0;
 }
 
 float ki_td_screen_scale(const ki_td_view *view, float logical_length)
 {
-    float scaled;
-    if (!view || !isfinite(logical_length) || !isfinite(view->scale) ||
-        view->scale <= 0.0f)
-        return 0.0f;
-    scaled = logical_length * view->scale;
-    return isfinite(scaled) ? scaled : 0.0f;
+    float result;
+    return ki_td_internal_screen_scale(view, logical_length, &result) ?
+           result : 0.0f;
 }
 
 bool ki_td_screen_to_logical(const ki_td_view *view, float screen_x,
@@ -159,9 +141,9 @@ bool ki_td_screen_to_logical(const ki_td_view *view, float screen_x,
 {
     float x;
     float y;
-    if (!view || !logical_x || !logical_y || !isfinite(screen_x) ||
-        !isfinite(screen_y) || !isfinite(view->scale) ||
-        view->scale <= 0.0f)
+    if (!ki_td_internal_view_valid(view) || !logical_x || !logical_y ||
+        logical_x == logical_y || !isfinite(screen_x) ||
+        !isfinite(screen_y))
         return false;
     x = (screen_x - (float)view->origin_x - (float)view->offset_x) /
         view->scale;
@@ -201,7 +183,7 @@ bool ki_td_view_visible_cells(const ki_td_view *view,
     int last_column;
     int last_row;
     if (!view || !bounds || !rect_is_valid(screen_bounds) ||
-        !isfinite(view->scale) || view->scale <= 0.0f ||
+        !ki_td_internal_view_valid(view) ||
         !isfinite(grid_origin_x) || !isfinite(grid_origin_y) ||
         cell_width <= 0 || cell_height <= 0 || columns <= 0 || rows <= 0 ||
         padding < 0)
@@ -260,7 +242,7 @@ int ki_td_shake_axis(uint32_t frame, float magnitude, uint32_t salt)
     if (!isfinite(magnitude) || magnitude <= 0.0f) return 0;
     uint32_t bits = visual_noise(frame ^ salt);
     float unit = (float)(bits >> 8) * (1.0f / 16777216.0f);
-    if (!finite_float_to_int(
+    if (!ki_td_internal_float_to_int(
             (unit - 0.5f) * magnitude, &displacement))
         return 0;
     return displacement;

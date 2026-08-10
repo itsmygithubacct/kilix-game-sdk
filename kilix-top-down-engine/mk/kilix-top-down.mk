@@ -19,10 +19,12 @@ KILIX_TD_LIBS := $(KILIX_TD_SOFT_LIB) $(KILIX_TD_CORE_LIB)
 KILIX_TD_CPPFLAGS := -I$(KILIX_TOP_DOWN_ROOT)/include
 KILIX_TD_PUBLIC_HEADERS := $(wildcard $(KILIX_TOP_DOWN_ROOT)/include/*.h)
 KILIX_TD_CORE_INPUTS := $(KILIX_TOP_DOWN_ROOT)/src/view.c \
+	$(KILIX_TOP_DOWN_ROOT)/src/internal.h \
 	$(KILIX_TOP_DOWN_ROOT)/include/kilix_top_down_types.h \
 	$(KILIX_TOP_DOWN_ROOT)/include/kilix_top_down_view.h \
 	$(KILIX_TOP_DOWN_ROOT)/Makefile
 KILIX_TD_SOFT_INPUTS := $(KILIX_TOP_DOWN_ROOT)/src/soft.c \
+	$(KILIX_TOP_DOWN_ROOT)/src/internal.h \
 	$(KILIX_TD_PUBLIC_HEADERS) \
 	$(KILIX_TD_SOFT_RASTER_ROOT)/include/soft_raster.h \
 	$(KILIX_TOP_DOWN_ROOT)/Makefile

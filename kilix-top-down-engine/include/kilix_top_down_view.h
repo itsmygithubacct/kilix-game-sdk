@@ -17,25 +17,30 @@ bool ki_td_fit_spec_init(ki_td_fit_spec *spec, int logical_width,
 /* Computes a deterministic orthographic view. KI_TD_SCALE_PIXEL_ART uses the
  * largest integer scale while it is at least integer_scale_threshold, then
  * falls back to the fractional fit. minimum_scale may deliberately make a
- * logical scene crop on a small framebuffer. */
+ * logical scene crop on a small framebuffer. Invalid, non-finite, or
+ * unrepresentable specifications fail without modifying view. */
 bool ki_td_view_fit(ki_td_view *view, const ki_td_fit_spec *spec);
 
 void ki_td_view_set_offset(ki_td_view *view, int x, int y);
-/* Coordinate helpers return zero when the view or result is not
- * representable. */
+/* Coordinate helpers return zero when the view, input, or result is not
+ * finite and representable. Zero is also a valid coordinate, so callers that
+ * need an explicit success result should retain logical coordinates or use
+ * ki_td_screen_to_logical for checked inverse conversion. */
 int ki_td_screen_x(const ki_td_view *view, float logical_x);
 int ki_td_screen_y(const ki_td_view *view, float logical_y);
 float ki_td_screen_scale(const ki_td_view *view, float logical_length);
 
 /* Inverts the orthographic view transform without clamping to the logical
- * scene. This is suitable for pointer picking and viewport calculations. */
+ * scene. This is suitable for pointer picking and viewport calculations.
+ * Output pointers must be distinct. Failure leaves both outputs unchanged. */
 bool ki_td_screen_to_logical(const ki_td_view *view, float screen_x,
                              float screen_y, float *logical_x,
                              float *logical_y);
 
 /* Returns the clipped row/column range intersecting screen_bounds. Counts may
  * be zero when the viewport misses the grid. padding expands the result by a
- * caller-selected number of cells before clipping. */
+ * caller-selected number of cells before clipping. Failure leaves bounds
+ * unchanged. */
 bool ki_td_view_visible_cells(const ki_td_view *view,
                               ki_td_rect screen_bounds,
                               float grid_origin_x, float grid_origin_y,

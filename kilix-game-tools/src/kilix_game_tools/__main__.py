@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from . import __version__
 from .audio import validate_audio
 from .catalog import validate_catalog
 from .common import ToolError
@@ -13,6 +14,7 @@ from .graphics import validate_graphics
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kilix-game-tools")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     audio = commands.add_parser("validate-audio")

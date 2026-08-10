@@ -48,6 +48,13 @@ static int64_t saturated_add(int64_t first, int64_t second)
     return second > INT64_MAX - first ? INT64_MAX : first + second;
 }
 
+static int64_t saturated_elapsed(int64_t now_ns, int64_t previous_ns)
+{
+    if (previous_ns < 0 && now_ns > INT64_MAX + previous_ns)
+        return INT64_MAX;
+    return now_ns - previous_ns;
+}
+
 kilix_game_frame kilix_game_clock_advance(kilix_game_clock *clock,
                                           int64_t now_ns)
 {
@@ -64,7 +71,7 @@ kilix_game_frame kilix_game_clock_advance(kilix_game_clock *clock,
         clock->last_ns = now_ns;
         return frame;
     }
-    elapsed = now_ns - clock->last_ns;
+    elapsed = saturated_elapsed(now_ns, clock->last_ns);
     clock->last_ns = now_ns;
     if (elapsed > clock->max_frame_ns) {
         frame.dropped_ns = elapsed - clock->max_frame_ns;

@@ -75,6 +75,9 @@ typedef struct kilix_game_audio_options {
     bool require_mixer;
 } kilix_game_audio_options;
 
+/* cue_spec_count cannot exceed cue_count * PCMMIX_BANK_VARIANTS_MAX, and each
+ * (cue, variant) slot plus each scene ID must be unique. */
+
 typedef struct kilix_game_audio_bus_state {
     float gain;
     float target;

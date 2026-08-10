@@ -20,14 +20,16 @@ PCM_MIXER_DIR ?= $(KILIX_GAME_KIT_ROOT)/third_party/pcm-mixer
 KILIX_STATE_DIR ?= $(KILIX_GAME_KIT_ROOT)/third_party/kilix-state
 
 KILIX_GAME_KIT_CPPFLAGS := \
+	-D_POSIX_C_SOURCE=200809L \
+	-D_DEFAULT_SOURCE \
 	-I$(KILIX_GAME_KIT_ROOT)/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-framebuffer/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/third_party/kitty_keyboard/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/soft-raster/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/pcm-mixer/include \
-	-I$(KILIX_GAME_KIT_ROOT)/third_party/kilix-state/include
+	-I$(KITTY_TERMINAL_SESSION_DIR)/include \
+	-I$(KITTY_FRAMEBUFFER_DIR)/include \
+	-I$(KITTY_INPUT_DIR)/include \
+	-I$(KITTY_KEYBOARD_DIR)/include \
+	-I$(SOFT_RASTER_DIR)/include \
+	-I$(PCM_MIXER_DIR)/include \
+	-I$(KILIX_STATE_DIR)/include
 KILIX_GAME_KIT_LDLIBS := -lz -lpthread -lm
 
 # Keep the consumer-facing archive target real (so unchanged applications do
@@ -38,21 +40,21 @@ KILIX_GAME_KIT_BUILD_INPUTS := \
 	$(KILIX_GAME_KIT_ROOT)/Makefile \
 	$(wildcard $(KILIX_GAME_KIT_ROOT)/include/*.h) \
 	$(wildcard $(KILIX_GAME_KIT_ROOT)/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-framebuffer/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-framebuffer/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/third_party/kitty_keyboard/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kitty-terminal-session/third_party/kitty-input/third_party/kitty_keyboard/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/soft-raster/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/soft-raster/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/soft-raster/src/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/pcm-mixer/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/pcm-mixer/src/*.c) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kilix-state/include/*.h) \
-	$(wildcard $(KILIX_GAME_KIT_ROOT)/third_party/kilix-state/src/*.c)
+	$(wildcard $(KITTY_TERMINAL_SESSION_DIR)/include/*.h) \
+	$(wildcard $(KITTY_TERMINAL_SESSION_DIR)/src/*.c) \
+	$(wildcard $(KITTY_FRAMEBUFFER_DIR)/include/*.h) \
+	$(wildcard $(KITTY_FRAMEBUFFER_DIR)/src/*.c) \
+	$(wildcard $(KITTY_INPUT_DIR)/include/*.h) \
+	$(wildcard $(KITTY_INPUT_DIR)/src/*.c) \
+	$(wildcard $(KITTY_KEYBOARD_DIR)/include/*.h) \
+	$(wildcard $(KITTY_KEYBOARD_DIR)/src/*.c) \
+	$(wildcard $(SOFT_RASTER_DIR)/include/*.h) \
+	$(wildcard $(SOFT_RASTER_DIR)/src/*.c) \
+	$(wildcard $(SOFT_RASTER_DIR)/src/*.h) \
+	$(wildcard $(PCM_MIXER_DIR)/include/*.h) \
+	$(wildcard $(PCM_MIXER_DIR)/src/*.c) \
+	$(wildcard $(KILIX_STATE_DIR)/include/*.h) \
+	$(wildcard $(KILIX_STATE_DIR)/src/*.c)
 
 $(KILIX_GAME_KIT_LIB): $(KILIX_GAME_KIT_BUILD_INPUTS)
 	$(MAKE) -C $(KILIX_GAME_KIT_ROOT) \

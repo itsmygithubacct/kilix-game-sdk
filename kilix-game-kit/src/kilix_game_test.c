@@ -132,7 +132,7 @@ bool kilix_test_contains(const void *bytes, size_t byte_count,
         (needle == NULL && needle_size != 0u)) return false;
     if (needle_size == 0u) return true;
     if (needle_size > byte_count) return false;
-    for (size_t index = 0u; index + needle_size <= byte_count; ++index)
+    for (size_t index = 0u; index <= byte_count - needle_size; ++index)
         if (memcmp(haystack + index, match, needle_size) == 0) return true;
     return false;
 }
@@ -157,7 +157,8 @@ kilix_test_image_diff kilix_test_diff_rgba(const uint8_t *first,
 {
     kilix_test_image_diff result = {0};
 
-    if ((first == NULL || second == NULL) && pixel_count != 0u) {
+    if (((first == NULL || second == NULL) && pixel_count != 0u) ||
+        pixel_count > SIZE_MAX / 4u) {
         result.differing_pixels = pixel_count;
         result.maximum_channel_delta = UINT8_MAX;
         return result;
@@ -218,6 +219,8 @@ bool kilix_test_golden_finish(const kilix_test_golden_suite *suite,
 bool kilix_test_write_ppm_rgba(const char *path, const uint8_t *rgba,
                                size_t width, size_t height, size_t stride)
 {
+    enum { chunk_pixels = 1024 };
+    uint8_t rgb[chunk_pixels * 3u];
     FILE *stream;
     size_t row;
     if (!path || !rgba || width == 0u || height == 0u ||
@@ -231,12 +234,23 @@ bool kilix_test_write_ppm_rgba(const char *path, const uint8_t *rgba,
     }
     for (row = 0u; row < height; ++row) {
         const uint8_t *source = rgba + row * stride;
-        size_t column;
-        for (column = 0u; column < width; ++column) {
-            if (fwrite(source + column * 4u, 1u, 3u, stream) != 3u) {
+        size_t column = 0u;
+        while (column < width) {
+            const size_t remaining = width - column;
+            const size_t count = remaining < chunk_pixels ?
+                                 remaining : chunk_pixels;
+            size_t index;
+
+            for (index = 0u; index < count; ++index) {
+                rgb[index * 3u] = source[(column + index) * 4u];
+                rgb[index * 3u + 1u] = source[(column + index) * 4u + 1u];
+                rgb[index * 3u + 2u] = source[(column + index) * 4u + 2u];
+            }
+            if (fwrite(rgb, 3u, count, stream) != count) {
                 (void)fclose(stream);
                 return false;
             }
+            column += count;
         }
     }
     return fclose(stream) == 0;

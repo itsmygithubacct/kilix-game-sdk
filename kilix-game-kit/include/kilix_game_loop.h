@@ -38,6 +38,9 @@ void kilix_game_clock_options_init(kilix_game_clock_options *options);
 bool kilix_game_clock_init(kilix_game_clock *clock,
                            const kilix_game_clock_options *options);
 void kilix_game_clock_reset(kilix_game_clock *clock, int64_t now_ns);
+/* Caller-supplied timestamps may span the full int64_t range. Backward time
+ * resynchronizes; an unrepresentable forward delta saturates before the
+ * configured frame and catch-up limits are applied. */
 kilix_game_frame kilix_game_clock_advance(kilix_game_clock *clock,
                                           int64_t now_ns);
 double kilix_game_clock_step_seconds(const kilix_game_clock *clock);

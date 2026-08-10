@@ -55,7 +55,11 @@ bool kilix_game_signals_install(kilix_game_signal_scope *scope)
     struct sigaction crash;
     size_t installed = 0u;
     size_t crashes = 0u;
-    if (!scope || active_signal_scope) {
+    if (!scope) {
+        errno = EINVAL;
+        return false;
+    }
+    if (active_signal_scope) {
         errno = EBUSY;
         return false;
     }
@@ -192,6 +196,7 @@ int kilix_game_host_run(kilix_game_host *host,
 {
     kilix_game_host_options defaults;
     const kilix_game_host_options *selected = options;
+    kilix_game_clock validated_clock;
     bool callback_started = false;
     bool failed = false;
     int64_t now;
@@ -202,12 +207,11 @@ int kilix_game_host_run(kilix_game_host *host,
     }
     if (selected->input_fd < 0 || selected->output_fd < 0 ||
         selected->idle_sleep_ns < 0 ||
-        !kilix_game_clock_init(&host->clock, &selected->clock))
+        !kilix_game_clock_init(&validated_clock, &selected->clock))
         return EXIT_FAILURE;
     *host = (kilix_game_host){0};
     kittyts_session_init(&host->terminal);
-    if (!kilix_game_clock_init(&host->clock, &selected->clock))
-        return EXIT_FAILURE;
+    host->clock = validated_clock;
     if (selected->install_signals &&
         !kilix_game_signals_install(&host->signals)) return EXIT_FAILURE;
     if (!selected->headless) {
@@ -319,7 +323,8 @@ done:
         kittyts_stop(&host->terminal);
         host->terminal_started = false;
     }
-    kilix_game_signals_set_emergency_terminal(NULL);
+    if (selected->install_signals)
+        kilix_game_signals_set_emergency_terminal(NULL);
     kilix_game_signals_restore(&host->signals);
     return failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

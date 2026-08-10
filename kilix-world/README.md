@@ -44,7 +44,8 @@ are all caller-owned. A dynamic game overlay can participate through the
 walkability, movement-cost, and opacity callbacks without mutating compiled
 map data.
 
-Search memory is explicit:
+Search memory is explicit. The search object and its five aligned arrays must
+be mutually disjoint, and each array must contain the bound capacity:
 
 ```c
 kilix_world_search_bind(
@@ -55,8 +56,40 @@ kilix_world_find_path(
     path, PATH_CAPACITY, &path_count, &movement_cost);
 ```
 
-When an output array is too small, path and reachable queries return
-`KILIX_WORLD_NO_SPACE` and report the required count. No query allocates.
+Path and reachable outputs must also be disjoint from the search workspace.
+When an output array is too small, the query returns
+`KILIX_WORLD_NO_SPACE`, reports the required count, and does not write a
+partial array. Path queries also report the total cost when requested. Other
+failures leave result arrays and scalar outputs unchanged. A path cost of
+`UINT32_MAX` is valid; a route that cannot be represented reports
+`KILIX_WORLD_OVERFLOW` rather than appearing disconnected.
+
+Callbacks may reflect a dynamic overlay, but their answers must stay stable
+for one query. The implementation may avoid repeated callback calls for cells
+whose state it has already established. Searches mutate their bound scratch
+arrays and therefore require external synchronization when a workspace is
+shared. Independent grids and workspaces share no library state.
+
+Line of sight retains the established direction-preserving Bresenham tie
+behavior: a tie-sensitive diagonal ray may visit different cells when its
+endpoints are reversed. This is gameplay-visible and is preserved for
+compatibility. The origin never blocks itself; the caller chooses whether an
+opaque goal blocks.
+
+Bulk top-down conversions validate the full input before publishing any
+element. Invalid cells and non-finite projected coordinates leave the output
+and count unchanged. Input, output, and count storage must be disjoint.
+
+No query allocates or performs I/O.
+
+## Determinism and validation
+
+Paths use minimum accumulated directed movement cost and deterministic
+row-major tie breaking. Reachable cells are ordered by cost, then row-major
+index, and the search does not evaluate steps beyond the requested cost
+frontier. Catalog validation requires valid grids and record arrays, unique
+map/region/object/portal IDs, in-bounds records, and reciprocal portal links.
+Cycles and self-reciprocal portals remain valid.
 
 ## Scope boundary
 
@@ -64,6 +97,10 @@ The library does not define tile meanings, diagonal movement, character
 occupancy, combat range, cover, quests, dialogue, encounters, random
 generation, or draw ordering. Games compose those policies from the spatial
 facts returned here.
+
+Shared-library SONAME/version-link policy, pkg-config metadata, and uninstall
+behavior are intentionally SDK-wide packaging decisions rather than local
+world-model policy.
 
 ## License
 

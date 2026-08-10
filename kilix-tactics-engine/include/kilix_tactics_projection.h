@@ -24,6 +24,20 @@ extern "C" {
  * KT_ROTATE_CCW matches C-COM; KT_ROTATE_CW matches Kilix Advanced Tactics.
  * The two are related by r -> (4 - r) & 3.
  */
+enum {
+    /*
+     * Largest accepted tile extent and level step, in pixels.
+     *
+     * The projection combines caller positions spanning the whole int32 range
+     * with these extents and with zoom, and the bound is what keeps every
+     * intermediate inside int64. Both consuming games are three orders of
+     * magnitude below it (32 x 16 tiles, a 12 or 24 pixel level step), so it
+     * constrains nothing real; it exists so an extent chosen near INT32_MAX
+     * is rejected at init rather than overflowing picking and zoom later.
+     */
+    KT_PROJECTION_MAX_EXTENT = 65536
+};
+
 typedef enum kt_rotation_sense {
     KT_ROTATE_CCW = 0,
     KT_ROTATE_CW = 1

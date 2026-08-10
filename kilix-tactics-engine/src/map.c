@@ -32,9 +32,35 @@ kt_status kt_map_init(kt_map *map, int32_t width, int32_t height,
     return KT_OK;
 }
 
+/*
+ * Is the declared extent one this map can actually address?
+ *
+ * kt_map exposes its fields and integration.md's storage section shows
+ * callers writing them, so a map can reach a lookup without having passed
+ * through kt_map_init(). Checking the extent against the documented maxima
+ * and against the storage actually bound is what makes every index derived
+ * below provably inside the caller's array. The bounds are checked before
+ * the product so the multiplication itself cannot overflow.
+ */
+static bool kt_map_extent_ok(const kt_map *map)
+{
+    size_t required;
+
+    if (map == NULL || map->cells == NULL) {
+        return false;
+    }
+    if (map->width <= 0 || map->height <= 0 || map->levels <= 0 ||
+        map->width > KT_MAP_MAX_SPAN || map->height > KT_MAP_MAX_SPAN ||
+        map->levels > KT_MAP_MAX_LEVELS) {
+        return false;
+    }
+    required = (size_t)map->width * (size_t)map->height * (size_t)map->levels;
+    return required <= map->cell_capacity;
+}
+
 size_t kt_map_cell_count(const kt_map *map)
 {
-    if (map == NULL || map->cells == NULL) {
+    if (!kt_map_extent_ok(map)) {
         return 0u;
     }
     return (size_t)map->width * (size_t)map->height * (size_t)map->levels;
@@ -42,7 +68,7 @@ size_t kt_map_cell_count(const kt_map *map)
 
 bool kt_map_contains(const kt_map *map, kt_cell_point point)
 {
-    if (map == NULL || map->cells == NULL) {
+    if (!kt_map_extent_ok(map)) {
         return false;
     }
     return point.x >= 0 && point.x < map->width && point.y >= 0 &&
@@ -176,7 +202,12 @@ kt_status kt_map_validate(kt_map *map)
         map->levels > KT_MAP_MAX_LEVELS) {
         return KT_ERR_RANGE;
     }
-    count = kt_map_cell_count(map);
+    /*
+     * Derived here rather than through kt_map_cell_count(), which reports
+     * zero for an extent the map cannot address -- exactly the case this
+     * function exists to name. The range test above bounds the product.
+     */
+    count = (size_t)map->width * (size_t)map->height * (size_t)map->levels;
     if (count > map->cell_capacity) {
         return KT_ERR_CAPACITY;
     }

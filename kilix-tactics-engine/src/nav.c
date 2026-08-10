@@ -73,20 +73,40 @@ kt_status kt_nav_workspace_init_indexed(kt_nav_workspace *workspace,
 static uint32_t kt_default_heuristic(kt_cell_point at, kt_cell_point goal,
                                      uint32_t min_step_cost, bool diagonal)
 {
-    int32_t dx = goal.x - at.x;
-    int32_t dy = goal.y - at.y;
-    uint32_t adx = (uint32_t)(dx < 0 ? -dx : dx);
-    uint32_t ady = (uint32_t)(dy < 0 ? -dy : dy);
+    /*
+     * Both coordinates are map cells, so the difference is exact in int64 and
+     * its magnitude fits uint32 without the undefined negation of INT32_MIN.
+     */
+    int64_t dx = (int64_t)goal.x - (int64_t)at.x;
+    int64_t dy = (int64_t)goal.y - (int64_t)at.y;
+    uint64_t adx = (uint64_t)(dx < 0 ? -dx : dx);
+    uint64_t ady = (uint64_t)(dy < 0 ? -dy : dy);
+    uint64_t steps;
+    uint64_t estimate;
 
     if (!diagonal) {
-        return (adx + ady) * min_step_cost;
+        steps = adx + ady;
+    } else {
+        /*
+         * With diagonals the shortest possible route is max(|dx|,|dy|) steps.
+         * Charging each at the cheapest cardinal rate stays admissible, since
+         * a diagonal is never cheaper than a cardinal step in either game.
+         */
+        steps = adx < ady ? ady : adx;
     }
     /*
-     * With diagonals the shortest possible route is max(|dx|,|dy|) steps.
-     * Charging each at the cheapest cardinal rate stays admissible, since a
-     * diagonal is never cheaper than a cardinal step in either game.
+     * Saturate rather than wrap. A wrapped estimate is small, which silently
+     * makes the heuristic inadmissible and lets A* settle a node before its
+     * cost is final -- the one failure this search cannot recover from,
+     * because no closed node is ever reopened. Saturating keeps it an upper
+     * bound on the representable cost space, where every route is already
+     * pruned by max_cost.
      */
-    return (adx < ady ? ady : adx) * min_step_cost;
+    estimate = steps * (uint64_t)min_step_cost;
+    if (steps != 0u && estimate / steps != (uint64_t)min_step_cost) {
+        return UINT32_MAX;
+    }
+    return estimate > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)estimate;
 }
 
 static bool kt_node_is_better(const kt_nav_node *a, const kt_nav_node *b,
@@ -313,6 +333,14 @@ static kt_status kt_search(const kt_map *map, kt_nav_workspace *workspace,
 
     if (map == NULL || workspace == NULL || hooks == NULL ||
         hooks->step_cost == NULL) {
+        return KT_ERR_ARGUMENT;
+    }
+    /*
+     * The capacities below are meaningless unless the storage they describe
+     * is actually bound. kt_nav_was_reached() already refused an unbound
+     * workspace; the search now agrees rather than dereferencing it.
+     */
+    if (workspace->nodes == NULL || workspace->heap == NULL) {
         return KT_ERR_ARGUMENT;
     }
     cells = kt_map_cell_count(map);

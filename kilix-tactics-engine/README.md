@@ -32,7 +32,32 @@ make test-headers
 The runtime needs a C11 compiler, Make, and `ar`. The core archive has no
 dependency beyond the standard library, so ordering and spatial logic are
 testable headlessly. Only the soft adapter needs a `soft-raster` checkout,
-supplied through `SOFT_RASTER_DIR`.
+supplied through `SOFT_RASTER_DIR`; `make test` builds it, so a checkout is
+needed to run the full suite.
+
+`make test` runs four suites: `test-tactics` (behaviour), `test-properties`
+(properties checked against brute-force references), `test-boundaries` (input
+validation, failure paths, and storage contracts), and `test-soft` (the
+rasterizer adapter, against a real canvas).
+
+## Input domain and failure contract
+
+Every entry point validates its arguments and reports rather than wrapping:
+
+- Integer results that do not fit their output type return `KT_ERR_RANGE` and
+  leave caller outputs untouched. This covers projection, sub-cell projection,
+  and the map-free rotation, all of which accept the whole `int32_t` domain.
+- Tile extents and the level step are bounded by `KT_PROJECTION_MAX_EXTENT`,
+  checked at `kt_projection_init()` and re-checked by each transform so a
+  projection restored straight into the struct cannot bypass it.
+- A `kt_map`, `kt_nav_workspace`, or `kt_draw_queue` that describes more
+  storage than it binds is refused (`KT_ERR_CAPACITY` or `KT_ERR_STATE`)
+  rather than indexed. Cells outside addressable storage block on every
+  channel, matching the off-map rule.
+- The soft adapter skips sprites whose anchor cannot address a pixel, and
+  treats non-finite or non-positive coverage as "do not draw"; finite coverage
+  above one is opaque. Overlay geometry that cannot reach the canvas is
+  skipped without calling the rasterizer.
 
 ## Use from a Kilix game
 

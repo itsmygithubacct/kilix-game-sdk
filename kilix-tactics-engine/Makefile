@@ -31,6 +31,12 @@ TEST_SOURCES := tests/test_tactics.c
 TEST_BIN := $(BUILD_DIR)/test-tactics
 PROP_SOURCES := tests/test_properties.c
 PROP_BIN := $(BUILD_DIR)/test-properties
+BOUND_SOURCES := tests/test_boundaries.c
+BOUND_BIN := $(BUILD_DIR)/test-boundaries
+# The soft adapter is only testable against a rasterizer, so this suite
+# compiles the pinned soft-raster the same way a consuming game links it.
+SOFT_TEST_SOURCES := tests/test_soft.c $(SOFT_RASTER_DIR)/src/soft_raster.c
+SOFT_TEST_BIN := $(BUILD_DIR)/test-soft
 
 .PHONY: all core soft test sanitize test-clang test-headers clean
 
@@ -62,9 +68,20 @@ $(PROP_BIN): $(PROP_SOURCES) $(CORE_LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PROP_SOURCES) $(CORE_LIB) -o $@ -lm
 
-test: $(TEST_BIN) $(PROP_BIN)
+$(BOUND_BIN): $(BOUND_SOURCES) $(CORE_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(BOUND_SOURCES) $(CORE_LIB) -o $@ -lm
+
+$(SOFT_TEST_BIN): $(SOFT_TEST_SOURCES) $(SOFT_LIB) $(CORE_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SOFT_RASTER_DIR)/include $(CFLAGS) \
+		$(SOFT_TEST_SOURCES) $(SOFT_LIB) $(CORE_LIB) -o $@ -lm
+
+test: $(TEST_BIN) $(PROP_BIN) $(BOUND_BIN) $(SOFT_TEST_BIN)
 	$(TEST_BIN)
 	$(PROP_BIN)
+	$(BOUND_BIN)
+	$(SOFT_TEST_BIN)
 
 sanitize:
 	$(MAKE) clean

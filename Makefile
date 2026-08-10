@@ -19,6 +19,20 @@ all: check-submodules
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" all
 
 test: check-submodules
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-game-kit/mk/game-kit.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-assets/mk/kilix-assets.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-story/mk/kilix-story.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-world/mk/kilix-world.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-tactics-engine/mk/kilix-tactics.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-top-down-engine/mk/kilix-top-down.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-ui/mk/kilix-ui.mk consumer-default
 	$(MAKE) -C kilix-game-kit test
 	$(MAKE) -C kilix-assets test
 	$(MAKE) -C kilix-story test

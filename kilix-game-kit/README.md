@@ -60,7 +60,9 @@ game: $(GAME_OBJECTS) $(KILIX_GAME_KIT_LIB)
 Consumers can include `kilix_game_kit.h` for the complete runtime stack or
 the individual public headers. Since the static archive stores dependencies
 as separate objects, the linker pulls only the APIs a game uses. The fragment
-also exports the existing `KITTY_FRAMEBUFFER_DIR`, `KITTY_KEYBOARD_DIR`,
+preserves the consumer Makefile's default-goal selection instead of making its
+internal archive rule the implicit target, and also exports the existing
+`KITTY_FRAMEBUFFER_DIR`, `KITTY_KEYBOARD_DIR`,
 `SOFT_RASTER_DIR`, and `PCM_MIXER_DIR` names so migrations can retain useful
 header and asset-validation prerequisites while deleting duplicate vendor
 object recipes.

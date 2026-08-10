@@ -1,6 +1,8 @@
 # Include this file from a game Makefile after adding kilix-game-kit as a
 # recursive submodule. Consumers link one archive and keep their own targets.
 
+KILIX_GAME_KIT_DEFAULT_GOAL_BEFORE_INCLUDE := $(.DEFAULT_GOAL)
+
 ifndef KILIX_GAME_KIT_ROOT
 KILIX_GAME_KIT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 endif
@@ -55,3 +57,10 @@ KILIX_GAME_KIT_BUILD_INPUTS := \
 $(KILIX_GAME_KIT_LIB): $(KILIX_GAME_KIT_BUILD_INPUTS)
 	$(MAKE) -C $(KILIX_GAME_KIT_ROOT) \
 		BUILD_DIR=$(KILIX_GAME_KIT_BUILD_DIR) $(KILIX_GAME_KIT_LIB)
+
+# An included fragment must not become the consumer's implicit default goal.
+# If no target existed before this include, clear the archive rule selected by
+# GNU Make so the next target in the consumer Makefile becomes the default.
+ifeq ($(KILIX_GAME_KIT_DEFAULT_GOAL_BEFORE_INCLUDE),)
+.DEFAULT_GOAL :=
+endif

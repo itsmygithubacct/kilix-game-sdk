@@ -9,6 +9,7 @@ from . import __version__
 from .audio import validate_audio
 from .catalog import validate_catalog
 from .common import ToolError
+from .contact import build_contact_sheet
 from .graphics import validate_graphics
 
 
@@ -25,6 +26,15 @@ def build_parser() -> argparse.ArgumentParser:
     graphics.add_argument("manifest", type=Path)
     graphics.add_argument("--root", type=Path)
     graphics.add_argument("--no-provenance", action="store_true")
+
+    sheet = commands.add_parser(
+        "contact-sheet",
+        help="composite generated art into one grid image for human review")
+    sheet.add_argument("output", type=Path)
+    sheet.add_argument("images", type=Path, nargs="+")
+    sheet.add_argument("--columns", type=int, default=4)
+    sheet.add_argument("--cell", default="320x240",
+                       help="cell size as WxH, default 320x240")
 
     catalog = commands.add_parser("validate-catalog")
     catalog.add_argument("catalog", type=Path)
@@ -51,6 +61,20 @@ def main() -> int:
             print(
                 f"PASS graphics game={report.game} atlases={report.atlases} "
                 f"bitmaps={report.bitmaps} clean-room=yes"
+            )
+        elif args.command == "contact-sheet":
+            try:
+                cell_width, _, cell_height = args.cell.partition("x")
+                cell = (int(cell_width), int(cell_height))
+            except ValueError as exc:
+                raise ToolError(f"--cell must be WxH, got {args.cell}") from exc
+            report = build_contact_sheet(
+                args.output, list(args.images),
+                columns=args.columns, cell=cell)
+            print(
+                f"PASS contact-sheet images={report.images} "
+                f"grid={report.columns}x{report.rows} "
+                f"size={report.width}x{report.height} out={report.output}"
             )
         else:
             content_id, launch_mode = validate_catalog(args.catalog, args.game_id)

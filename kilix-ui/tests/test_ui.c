@@ -751,6 +751,194 @@ static bool test_randomized_render_safety(void)
     return true;
 }
 
+/* The canvas as one number, for the no-op assertions below: a draw call that
+ * must do nothing has to leave every pixel untouched, not merely look
+ * unchanged. */
+static uint64_t hash_canvas(ki_td_soft_renderer *renderer)
+{
+    const uint8_t *rgba = ki_td_soft_pack_rgba(renderer);
+    return rgba ? hash_bytes(rgba, renderer->rgba_size) : 0u;
+}
+
+/* The hit test must agree with the pixels, everywhere -- not at a few sampled
+ * points. This walks EVERY logical pixel of a list rect and checks
+ * kilix_ui_list_hit against the row geometry the draw call uses, so a future
+ * change to padding, row height or the visible range cannot move one without
+ * the other. */
+static bool test_list_hit_agrees_with_draw(void)
+{
+    kilix_ui_style style;
+    kilix_ui_focus focus;
+    ki_td_view view = {0};
+    ki_td_rect rect = {10, 6, 120, 96};
+    int x, y;
+    size_t hits = 0u;
+
+    kilix_ui_style_init(&style);
+    kilix_ui_focus_init(&focus, 12u, 5u);
+    focus.first_visible = 3u;
+    view.logical_width = 320;
+    view.logical_height = 180;
+    view.scale = 1.0f;
+
+    for (y = rect.y - 4; y < rect.y + rect.height + 4; ++y) {
+        for (x = rect.x - 4; x < rect.x + rect.width + 4; ++x) {
+            size_t hit = kilix_ui_list_hit(&view, rect, &style, &focus,
+                                           (float)x, (float)y);
+            bool inside = x >= rect.x && x < rect.x + rect.width &&
+                          y >= rect.y && y < rect.y + rect.height;
+            if (!inside) {
+                CHECK(hit == SIZE_MAX);
+                continue;
+            }
+            if (hit == SIZE_MAX) continue;
+            /* A reported hit must be a visible row, and the point must lie in
+             * that row's own band. */
+            CHECK(hit >= focus.first_visible);
+            CHECK(hit < focus.first_visible + focus.page_size);
+            CHECK(hit < focus.item_count);
+            {
+                int64_t offset = (int64_t)(hit - focus.first_visible);
+                int64_t top = rect.y + style.padding +
+                              offset * style.row_height;
+                int64_t bottom = top + style.row_height;
+                if (bottom > rect.y + rect.height)
+                    bottom = rect.y + rect.height;
+                CHECK((int64_t)y >= top && (int64_t)y < bottom);
+            }
+            ++hits;
+        }
+    }
+    /* If nothing ever hit, every assertion above is vacuous. */
+    CHECK(hits > 0u);
+    /* A NULL focus, a degenerate rect and non-finite coordinates all miss. */
+    CHECK(kilix_ui_list_hit(&view, rect, &style, NULL, 20.0f, 20.0f)
+          == SIZE_MAX);
+    CHECK(kilix_ui_list_hit(NULL, rect, &style, &focus, 20.0f, 20.0f)
+          == SIZE_MAX);
+    {
+        ki_td_rect empty = {10, 6, 0, 0};
+        CHECK(kilix_ui_list_hit(&view, empty, &style, &focus, 10.0f, 6.0f)
+              == SIZE_MAX);
+    }
+    return true;
+}
+
+static bool test_calendar(void)
+{
+    static kilix_ui_calendar_day days[35];
+    static const char *const labels[7] = {"M", "T", "W", "T", "F", "S", "S"};
+    ki_td_soft_renderer renderer = {0};
+    kilix_ui_style style;
+    kilix_ui_calendar calendar;
+    ki_td_view view = {0};
+    ki_td_rect rect = {4, 4, 220, 150};
+    sr_canvas *canvas;
+    size_t index;
+    uint64_t drawn, blank;
+
+    kilix_ui_style_init(&style);
+    view.logical_width = 320;
+    view.logical_height = 180;
+    view.scale = 1.0f;
+    CHECK(ki_td_soft_renderer_init(&renderer, 320, 180));
+    canvas = ki_td_soft_canvas(&renderer);
+
+    for (index = 0u; index < 35u; ++index) {
+        days[index].in_month = index >= 2u && index < 33u;
+        days[index].enabled = true;
+        days[index].marks = (uint8_t)((index % 5u == 0u) ? 0x03u : 0u);
+    }
+    memset(&calendar, 0, sizeof calendar);
+    calendar.title = "AUGUST 2026";
+    calendar.weekday_labels = labels;
+    calendar.days = days;
+    calendar.day_count = 35u;
+    calendar.today = 10u;
+    calendar.mark_colors[0] = UINT32_C(0x4fa3ff);
+    calendar.mark_colors[1] = UINT32_C(0xffb347);
+    calendar.font = SR_FONT_COMPACT_7X14;
+
+    ki_td_soft_clear(&renderer, 0u);
+    kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                           &calendar);
+    drawn = hash_canvas(&renderer);
+
+    /* Every no-op case must leave the canvas exactly as it found it. */
+    ki_td_soft_clear(&renderer, 0u);
+    blank = hash_canvas(&renderer);
+    CHECK(drawn != blank);
+
+    {
+        kilix_ui_calendar broken = calendar;
+        broken.day_count = 34u;              /* not a multiple of 7 */
+        kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                               &broken);
+        CHECK(hash_canvas(&renderer) == blank);
+
+        broken = calendar;
+        broken.days = NULL;
+        kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                               &broken);
+        CHECK(hash_canvas(&renderer) == blank);
+
+        broken = calendar;
+        broken.day_count = 0u;
+        kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                               &broken);
+        CHECK(hash_canvas(&renderer) == blank);
+    }
+    {
+        ki_td_rect degenerate = {4, 4, 3, 3};
+        kilix_ui_draw_calendar(&renderer, &view, degenerate, &style, NULL,
+                               NULL, &calendar);
+        CHECK(hash_canvas(&renderer) == blank);
+    }
+    kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL, NULL);
+    CHECK(hash_canvas(&renderer) == blank);
+
+    /* The caller's clip survives the draw. */
+    {
+        int saved[4];
+        saved[0] = canvas->clip_x0; saved[1] = canvas->clip_y0;
+        saved[2] = canvas->clip_x1; saved[3] = canvas->clip_y1;
+        canvas->clip_x0 = 8; canvas->clip_y0 = 8;
+        canvas->clip_x1 = 100; canvas->clip_y1 = 90;
+        kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                               &calendar);
+        CHECK(canvas->clip_x0 == 8 && canvas->clip_y0 == 8);
+        CHECK(canvas->clip_x1 == 100 && canvas->clip_y1 == 90);
+        canvas->clip_x0 = saved[0]; canvas->clip_y0 = saved[1];
+        canvas->clip_x1 = saved[2]; canvas->clip_y1 = saved[3];
+    }
+
+    /* Hit testing: every in-month cell is reachable, filler never is, and a
+     * hit round-trips to the cell it names. */
+    {
+        size_t reachable = 0u;
+        int x, y;
+        for (y = rect.y; y < rect.y + rect.height; ++y) {
+            for (x = rect.x; x < rect.x + rect.width; ++x) {
+                size_t hit = kilix_ui_calendar_hit(&view, rect, &style,
+                                                   &calendar, (float)x,
+                                                   (float)y);
+                if (hit == SIZE_MAX) continue;
+                CHECK(hit < calendar.day_count);
+                CHECK(days[hit].in_month);
+                ++reachable;
+            }
+        }
+        CHECK(reachable > 0u);
+        CHECK(kilix_ui_calendar_hit(&view, rect, &style, NULL, 10.0f, 10.0f)
+              == SIZE_MAX);
+        CHECK(kilix_ui_calendar_hit(&view, rect, &style, &calendar,
+                                    -50.0f, -50.0f) == SIZE_MAX);
+    }
+
+    ki_td_soft_renderer_destroy(&renderer);
+    return true;
+}
+
 int main(void)
 {
     static const struct test_case {
@@ -767,7 +955,9 @@ int main(void)
         {"style normalization", test_style_normalization},
         {"visible-work equivalence", test_visible_work_equivalence},
         {"prompt truncation", test_prompt_truncation},
-        {"randomized render safety", test_randomized_render_safety}
+        {"randomized render safety", test_randomized_render_safety},
+        {"list hit agrees with draw", test_list_hit_agrees_with_draw},
+        {"calendar widget", test_calendar}
     };
     size_t index;
     size_t failures = 0u;
@@ -781,6 +971,9 @@ int main(void)
         (void)fprintf(stderr, "FAIL %zu kilix-ui test suite(s)\n", failures);
         return EXIT_FAILURE;
     }
-    (void)puts("PASS all 10 kilix-ui suites");
+    /* Computed, not a literal: the count was hardcoded and had to be edited
+     * by hand every time a suite was added, so it silently under-reported. */
+    (void)printf("PASS all %zu kilix-ui suites\n",
+                 sizeof tests / sizeof tests[0]);
     return EXIT_SUCCESS;
 }

@@ -608,14 +608,16 @@ void kilix_ui_draw_dialogue(ki_td_soft_renderer *renderer,
 static void append_bounded(char *buffer, size_t capacity, size_t *length,
                            const char *text);
 
-void kilix_ui_draw_meter(ki_td_soft_renderer *renderer,
-                         const ki_td_view *view, ki_td_rect rect,
-                         const kilix_ui_style *style, float value,
-                         float maximum, const char *label)
+void kilix_ui_draw_meter_text(ki_td_soft_renderer *renderer,
+                              const ki_td_view *view, ki_td_rect rect,
+                              const kilix_ui_style *style, float value,
+                              float maximum, const char *label,
+                              const char *value_text)
 {
     kilix_ui_style selected = normalized_style(style);
     float fraction = 0.0f;
     char text[96];
+    size_t length = 0u;
     if (!draw_ready(renderer, view, rect)) return;
     if (isfinite(value) && isfinite(maximum) && maximum > 0.0f)
         fraction = value / maximum;
@@ -631,20 +633,38 @@ void kilix_ui_draw_meter(ki_td_soft_renderer *renderer,
                              (float)(rect.height - 2), selected.meter_color,
                              1.0f);
     stroke_rect(renderer, view, rect, selected.border_color);
-    if (label) {
-        char numbers[640];
-        size_t length = 0u;
-        (void)snprintf(numbers, sizeof numbers, "%.0f/%.0f",
-                       (double)value, (double)maximum);
-        text[0] = '\0';
-        append_bounded(text, sizeof text, &length, label);
-        append_bounded(text, sizeof text, &length, " ");
-        append_bounded(text, sizeof text, &length, numbers);
-        draw_text(renderer, view, &selected, (int64_t)rect.x + 3,
-                  (int64_t)rect.y + (rect.height - 16) / 2, text,
-                  selected.text_color);
-    }
+    if (!label && !value_text) return;
+    text[0] = '\0';
+    if (label) append_bounded(text, sizeof text, &length, label);
+    if (label && value_text) append_bounded(text, sizeof text, &length, " ");
+    if (value_text) append_bounded(text, sizeof text, &length, value_text);
+    draw_text(renderer, view, &selected, (int64_t)rect.x + 3,
+              (int64_t)rect.y + (rect.height - 16) / 2, text,
+              selected.text_color);
 }
+
+/* The original meter is this call with the numbers it always appended, so the
+ * frozen primitive hash 0x18e002874552cb08 is unchanged. A NULL label still
+ * draws no text at all, numbers included, which is what it always did. */
+void kilix_ui_draw_meter(ki_td_soft_renderer *renderer,
+                         const ki_td_view *view, ki_td_rect rect,
+                         const kilix_ui_style *style, float value,
+                         float maximum, const char *label)
+{
+    char numbers[640];
+    if (!label) {
+        kilix_ui_draw_meter_text(renderer, view, rect, style, value, maximum,
+                                 NULL, NULL);
+        return;
+    }
+    (void)snprintf(numbers, sizeof numbers, "%.0f/%.0f", (double)value,
+                   (double)maximum);
+    kilix_ui_draw_meter_text(renderer, view, rect, style, value, maximum,
+                             label, numbers);
+}
+
+static void append_bounded(char *buffer, size_t capacity, size_t *length,
+                           const char *text);
 
 static void append_bounded(char *buffer, size_t capacity, size_t *length,
                            const char *text)
@@ -1001,4 +1021,186 @@ void kilix_ui_draw_shop(ki_td_soft_renderer *renderer,
                   text, color);
     }
     restore_clip(canvas, saved);
+}
+
+/* ---- calendar and hit testing ------------------------------------------- */
+
+/* One place decides the grid, so the draw call and the hit test cannot drift
+ * apart. Returns false when the record or the geometry cannot produce cells. */
+typedef struct ui_calendar_grid {
+    int64_t origin_x, origin_y;   /* the first cell's top-left */
+    int64_t cell_width, cell_height;
+    size_t rows;
+} ui_calendar_grid;
+
+#define UI_CALENDAR_HEADER_ROWS 2   /* the title, then the weekday labels */
+
+static bool calendar_grid(ki_td_rect rect, const kilix_ui_style *style,
+                          const kilix_ui_calendar *calendar,
+                          ui_calendar_grid *grid)
+{
+    int64_t inner_width, inner_height, header;
+    if (!calendar || !calendar->days || calendar->day_count == 0u ||
+        calendar->day_count % 7u != 0u)
+        return false;
+    inner_width = (int64_t)rect.width - 2 * style->padding;
+    header = (int64_t)UI_CALENDAR_HEADER_ROWS * style->row_height;
+    inner_height = (int64_t)rect.height - 2 * style->padding - header;
+    grid->rows = calendar->day_count / 7u;
+    if (inner_width < 7 || inner_height < (int64_t)grid->rows) return false;
+    grid->cell_width = inner_width / 7;
+    grid->cell_height = inner_height / (int64_t)grid->rows;
+    if (grid->cell_width <= 0 || grid->cell_height <= 0) return false;
+    grid->origin_x = (int64_t)rect.x + style->padding;
+    grid->origin_y = (int64_t)rect.y + style->padding + header;
+    return true;
+}
+
+void kilix_ui_draw_calendar(ki_td_soft_renderer *renderer,
+                            const ki_td_view *view, ki_td_rect rect,
+                            const kilix_ui_style *style,
+                            const ki_td_nine_slice *skin,
+                            const kilix_ui_focus *focus,
+                            const kilix_ui_calendar *calendar)
+{
+    kilix_ui_style selected = normalized_style(style);
+    ui_calendar_grid grid;
+    sr_canvas *canvas;
+    int saved[4];
+    size_t index;
+    int column;
+
+    if (!calendar_grid(rect, &selected, calendar, &grid)) return;
+    if (!begin_panel(renderer, view, rect, &selected, skin, &canvas, saved))
+        return;
+
+    if (calendar->title) {
+        draw_text(renderer, view, &selected,
+                  (int64_t)rect.x + selected.padding,
+                  (int64_t)rect.y + selected.padding, calendar->title,
+                  selected.text_color);
+    }
+    if (calendar->weekday_labels) {
+        for (column = 0; column < 7; ++column) {
+            const char *label = calendar->weekday_labels[column];
+            if (!label) continue;
+            draw_text(renderer, view, &selected,
+                      grid.origin_x + (int64_t)column * grid.cell_width + 1,
+                      (int64_t)rect.y + selected.padding +
+                          selected.row_height,
+                      label, selected.muted_color);
+        }
+    }
+
+    for (index = 0u; index < calendar->day_count; ++index) {
+        const kilix_ui_calendar_day *day = &calendar->days[index];
+        int64_t cell_x = grid.origin_x +
+                         (int64_t)(index % 7u) * grid.cell_width;
+        int64_t cell_y = grid.origin_y +
+                         (int64_t)(index / 7u) * grid.cell_height;
+        char number[8];
+        size_t length = 0u;
+        uint32_t ink;
+        int bit;
+
+        if (!day->in_month) continue;   /* filler stays blank, not greyed */
+
+        if (focus && focus->selected == index) {
+            ki_td_soft_fill_rect(renderer, view, (float)cell_x,
+                                 (float)cell_y, (float)grid.cell_width,
+                                 (float)grid.cell_height,
+                                 selected.accent_color,
+                                 day->enabled ? 0.24f : 0.10f);
+        }
+        if (calendar->today == index) {
+            /* Today is a ring rather than a fill, so it survives being the
+             * selected cell as well. */
+            ki_td_soft_fill_rect(renderer, view, (float)cell_x,
+                                 (float)cell_y, (float)grid.cell_width, 1.0f,
+                                 selected.accent_color, 0.9f);
+            ki_td_soft_fill_rect(renderer, view, (float)cell_x,
+                                 (float)(cell_y + grid.cell_height - 1),
+                                 (float)grid.cell_width, 1.0f,
+                                 selected.accent_color, 0.9f);
+        }
+
+        number[0] = '\0';
+        append_integer(number, sizeof number, &length,
+                       (int)(index % 7u) + 1 + (int)(index / 7u) * 7);
+        ink = day->enabled ? selected.text_color : selected.muted_color;
+        sr_text_in(calendar->font, ki_td_soft_canvas(renderer),
+                   (float)(cell_x + 2), (float)(cell_y + 1), number, ink,
+                   1.0f, text_scale(view, &selected));
+
+        /* Marks: one dot per set bit, in bit order, beneath the number. */
+        for (bit = 0; bit < 8; ++bit) {
+            if ((day->marks & (uint8_t)(1u << bit)) == 0u) continue;
+            ki_td_soft_fill_rect(renderer, view,
+                                 (float)(cell_x + 2 + bit * 3),
+                                 (float)(cell_y + grid.cell_height - 3),
+                                 2.0f, 2.0f, calendar->mark_colors[bit],
+                                 1.0f);
+        }
+    }
+    restore_clip(canvas, saved);
+}
+
+size_t kilix_ui_list_hit(const ki_td_view *view, ki_td_rect rect,
+                         const kilix_ui_style *style,
+                         const kilix_ui_focus *focus,
+                         float logical_x, float logical_y)
+{
+    kilix_ui_style selected = normalized_style(style);
+    ui_range range;
+    size_t offset;
+
+    if (!view || !focus || !isfinite(logical_x) || !isfinite(logical_y) ||
+        rect.width <= 0 || rect.height <= 0)
+        return SIZE_MAX;
+    if (logical_x < (float)rect.x ||
+        logical_x >= (float)(rect.x + rect.width) ||
+        logical_y < (float)rect.y ||
+        logical_y >= (float)(rect.y + rect.height))
+        return SIZE_MAX;
+
+    range = visible_range(focus, focus->item_count, rect, selected.padding, 0,
+                          selected.row_height);
+    for (offset = 0u; offset < range.count; ++offset) {
+        int64_t top = (int64_t)rect.y + selected.padding +
+                      (int64_t)offset * selected.row_height;
+        int64_t bottom = top + selected.row_height;
+        /* The draw call clips the last row to the panel, so the hit test must
+         * too, or the bottom row would be clickable past its own pixels. */
+        if (bottom > (int64_t)rect.y + rect.height)
+            bottom = (int64_t)rect.y + rect.height;
+        if ((float)top <= logical_y && logical_y < (float)bottom)
+            return range.first + offset;
+    }
+    return SIZE_MAX;
+}
+
+size_t kilix_ui_calendar_hit(const ki_td_view *view, ki_td_rect rect,
+                             const kilix_ui_style *style,
+                             const kilix_ui_calendar *calendar,
+                             float logical_x, float logical_y)
+{
+    kilix_ui_style selected = normalized_style(style);
+    ui_calendar_grid grid;
+    int64_t column, row;
+    size_t index;
+
+    if (!view || !isfinite(logical_x) || !isfinite(logical_y)) return SIZE_MAX;
+    if (!calendar_grid(rect, &selected, calendar, &grid)) return SIZE_MAX;
+    if (logical_x < (float)grid.origin_x || logical_y < (float)grid.origin_y)
+        return SIZE_MAX;
+    column = ((int64_t)logical_x - grid.origin_x) / grid.cell_width;
+    row = ((int64_t)logical_y - grid.origin_y) / grid.cell_height;
+    if (column < 0 || column >= 7 || row < 0 ||
+        row >= (int64_t)grid.rows)
+        return SIZE_MAX;
+    index = (size_t)row * 7u + (size_t)column;
+    if (index >= calendar->day_count) return SIZE_MAX;
+    /* Filler cells are drawn blank, so they must not be clickable. */
+    if (!calendar->days[index].in_month) return SIZE_MAX;
+    return index;
 }

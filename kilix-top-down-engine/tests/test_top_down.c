@@ -807,6 +807,135 @@ static void test_randomized_render_safety(void)
     ki_td_soft_renderer_destroy(&renderer);
 }
 
+/* ki_td_soft_rgba_backdrop must keep detail a logical-space blit cannot.
+ *
+ * The discriminating case is a 1-pixel checkerboard on a plate authored above
+ * the logical size. Sampling once per logical cell lands on the same phase of
+ * the pattern every time, so ki_td_soft_rgba_resized produces flat blocks of
+ * k x k identical framebuffer pixels; sampling per screen pixel reproduces the
+ * alternation. The test asserts both halves, so it fails if the new blit
+ * regresses AND if it ever silently becomes the old one. */
+static void test_backdrop_full_resolution(void)
+{
+    enum { LOGICAL_W = 16, LOGICAL_H = 9, SCALE = 4 };
+    enum { PLATE_W = LOGICAL_W * SCALE, PLATE_H = LOGICAL_H * SCALE };
+    static uint8_t plate[PLATE_W * PLATE_H * 4];
+    ki_td_soft_renderer renderer;
+    ki_td_rgba8 image;
+    ki_td_view view = {0};
+    int x;
+    int y;
+    int alternations;
+    int flat_runs;
+
+    for (y = 0; y < PLATE_H; ++y) {
+        for (x = 0; x < PLATE_W; ++x) {
+            uint8_t *pixel = &plate[((size_t)y * PLATE_W + (size_t)x) * 4u];
+            uint8_t value = (uint8_t)(((x + y) & 1) ? 255u : 0u);
+            pixel[0] = value; pixel[1] = value; pixel[2] = value;
+            pixel[3] = 255u;
+        }
+    }
+    image = ki_td_rgba8_make(plate, PLATE_W, PLATE_H);
+    EXPECT(ki_td_rgba8_is_valid(&image));
+
+    view.logical_width = LOGICAL_W;
+    view.logical_height = LOGICAL_H;
+    view.scale = (float)SCALE;
+
+    EXPECT(ki_td_soft_renderer_init(&renderer, PLATE_W, PLATE_H));
+
+    /* The new blit: adjacent framebuffer pixels must differ. */
+    ki_td_soft_clear(&renderer, 0);
+    ki_td_soft_rgba_backdrop(&renderer, &view, &image, 1.0f);
+    alternations = 0;
+    for (y = 0; y < PLATE_H; ++y)
+        for (x = 0; x + 1 < PLATE_W; ++x)
+            if (renderer.canvas.px[(size_t)y * (size_t)renderer.canvas.w + (size_t)x] !=
+                renderer.canvas.px[(size_t)y * (size_t)renderer.canvas.w + (size_t)x + 1u])
+                alternations++;
+    EXPECT(alternations == PLATE_H * (PLATE_W - 1));
+
+    /* At scale == plate/logical the mapping is 1:1, so the framebuffer is the
+     * plate. Anything less is a resample we did not ask for. */
+    for (y = 0; y < PLATE_H; ++y) {
+        for (x = 0; x < PLATE_W; ++x) {
+            uint32_t expected = (((x + y) & 1) ? UINT32_C(0xffffffff)
+                                               : UINT32_C(0xff000000));
+            EXPECT(renderer.canvas.px[(size_t)y *
+                                      (size_t)renderer.canvas.w +
+                                      (size_t)x] == expected);
+        }
+    }
+
+    /* The old blit on the same input: k x k flat blocks, which is the defect. */
+    ki_td_soft_clear(&renderer, 0);
+    ki_td_soft_rgba_resized(&renderer, &view, 0.0f, 0.0f, &image,
+                            LOGICAL_W, LOGICAL_H, 1.0f);
+    flat_runs = 0;
+    for (y = 0; y < PLATE_H; ++y)
+        for (x = 0; x + 1 < PLATE_W; ++x)
+            if (renderer.canvas.px[(size_t)y * (size_t)renderer.canvas.w + (size_t)x] ==
+                renderer.canvas.px[(size_t)y * (size_t)renderer.canvas.w + (size_t)x + 1u])
+                flat_runs++;
+    EXPECT(flat_runs > 0);
+    EXPECT(flat_runs > alternations / 2);
+
+    /* Non-finite and non-positive alpha are no-ops, like every other blit. */
+    {
+        uint64_t before;
+        uint64_t after;
+        size_t bytes = (size_t)renderer.canvas.w *
+                       (size_t)renderer.canvas.h * sizeof(uint32_t);
+        ki_td_soft_clear(&renderer, 0);
+        before = hash_bytes((const uint8_t *)renderer.canvas.px, bytes);
+        ki_td_soft_rgba_backdrop(&renderer, &view, &image, NAN);
+        ki_td_soft_rgba_backdrop(&renderer, &view, &image, INFINITY);
+        ki_td_soft_rgba_backdrop(&renderer, &view, &image, 0.0f);
+        ki_td_soft_rgba_backdrop(&renderer, &view, &image, -1.0f);
+        ki_td_soft_rgba_backdrop(&renderer, NULL, &image, 1.0f);
+        ki_td_soft_rgba_backdrop(&renderer, &view, NULL, 1.0f);
+        after = hash_bytes((const uint8_t *)renderer.canvas.px, bytes);
+        EXPECT(before == after);
+    }
+
+    /* The clip is intersected and left exactly as the caller set it. */
+    {
+        sr_canvas *canvas = ki_td_soft_canvas(&renderer);
+        int clip_x0 = 5;
+        int clip_y0 = 3;
+        int clip_x1 = 11;
+        int clip_y1 = 8;
+        int outside = 0;
+        int inside = 0;
+
+        ki_td_soft_clear(&renderer, 0);
+        canvas->clip_x0 = clip_x0; canvas->clip_y0 = clip_y0;
+        canvas->clip_x1 = clip_x1; canvas->clip_y1 = clip_y1;
+        ki_td_soft_rgba_backdrop(&renderer, &view, &image, 1.0f);
+        EXPECT(canvas->clip_x0 == clip_x0 && canvas->clip_y0 == clip_y0);
+        EXPECT(canvas->clip_x1 == clip_x1 && canvas->clip_y1 == clip_y1);
+        for (y = 0; y < PLATE_H; ++y) {
+            for (x = 0; x < PLATE_W; ++x) {
+                bool in = x >= clip_x0 && x < clip_x1 &&
+                          y >= clip_y0 && y < clip_y1;
+                uint32_t pixel =
+                    renderer.canvas.px[(size_t)y *
+                                       (size_t)renderer.canvas.w +
+                                       (size_t)x];
+                if (!in && pixel != UINT32_C(0xff000000)) outside++;
+                if (in && pixel == UINT32_C(0xffffffff)) inside++;
+            }
+        }
+        EXPECT(outside == 0);
+        EXPECT(inside > 0);
+        canvas->clip_x0 = 0; canvas->clip_y0 = 0;
+        canvas->clip_x1 = renderer.canvas.w; canvas->clip_y1 = renderer.canvas.h;
+    }
+
+    ki_td_soft_renderer_destroy(&renderer);
+}
+
 int main(void)
 {
     static const struct {
@@ -824,7 +953,8 @@ int main(void)
         {"invalid draw transactions", test_invalid_draw_transactions},
         {"sprite ordering model", test_sprite_order_model},
         {"culling equivalence", test_culling_equivalence},
-        {"randomized render safety", test_randomized_render_safety}
+        {"randomized render safety", test_randomized_render_safety},
+        {"backdrop full resolution", test_backdrop_full_resolution}
     };
     size_t index;
     for (index = 0u; index < sizeof tests / sizeof tests[0]; ++index) {

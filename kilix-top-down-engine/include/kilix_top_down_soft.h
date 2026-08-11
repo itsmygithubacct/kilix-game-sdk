@@ -146,6 +146,23 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
                              const ki_td_view *view, float x, float y,
                              const ki_td_rgba8 *image, int width, int height,
                              float alpha);
+/* Fills the view's logical rect from `image` at SCREEN resolution rather than
+ * logical resolution, sampling
+ *     sx = (px - screen_origin_x) * image->width  / (logical_width  * scale)
+ *     sy = (py - screen_origin_y) * image->height / (logical_height * scale)
+ * so a plate authored above the logical size keeps its detail, and at
+ * scale = plate/logical it maps 1:1 to framebuffer pixels.
+ *
+ * Intended for full-canvas backdrops, never for sprites: ki_td_soft_rgba_resized
+ * samples once per logical cell, which is correct for a sprite that must stay
+ * quantized to logical space and lossy for a backdrop that fills the screen.
+ *
+ * Same clip, alpha-clamping and non-finite no-op rules as the other blits. The
+ * clip is read and never modified. */
+void ki_td_soft_rgba_backdrop(ki_td_soft_renderer *renderer,
+                              const ki_td_view *view,
+                              const ki_td_rgba8 *image, float alpha);
+
 /* Draws a resized RGBA8 image with its RGB modulated by 0xRRGGBB. */
 void ki_td_soft_rgba_tinted(ki_td_soft_renderer *renderer,
                             const ki_td_view *view, float x, float y,

@@ -891,6 +891,83 @@ void ki_td_soft_rgba_resized(ki_td_soft_renderer *renderer,
                       UINT32_C(0xffffff), alpha);
 }
 
+/* A full-canvas backdrop, sampled per SCREEN pixel.
+ *
+ * draw_rgba_resized above iterates the destination as logical cells and takes
+ * source_x = xx * image->width / width, where xx counts logical cells. For a
+ * sprite that is right: a sprite must stay quantized to logical space or it
+ * stops matching the art beside it. For a backdrop filling the canvas it means
+ * exactly logical_width x logical_height distinct samples survive however large
+ * the plate and however large the framebuffer -- a 1280-wide plate on a 480
+ * logical stage loses roughly 63% of its columns before it reaches the screen,
+ * and at k=4 a 1920x1080 plate is reduced to 480x270 and then blown back up in
+ * blocks.
+ *
+ * This walks the destination in framebuffer pixels instead, so a plate authored
+ * above the logical size keeps its detail and at scale k = plate/logical it maps
+ * 1:1. Same clip, alpha-clamping and non-finite no-op rules as the other blits;
+ * the clip is read and never modified, so a caller's clip survives unchanged.
+ * Existing callers are untouched. */
+void ki_td_soft_rgba_backdrop(ki_td_soft_renderer *renderer,
+                              const ki_td_view *view,
+                              const ki_td_rgba8 *image, float alpha)
+{
+    sr_canvas *canvas;
+    float selected;
+    int origin_x;
+    int origin_y;
+    int end_x;
+    int end_y;
+    int span_x;
+    int span_y;
+    int first_x;
+    int first_y;
+    int last_x;
+    int last_y;
+    int screen_y;
+
+    if (!renderer_is_ready(renderer) || !ki_td_rgba8_is_valid(image) ||
+        !normalized_alpha(alpha, &selected) ||
+        !ki_td_internal_view_valid(view) ||
+        view->logical_width <= 0 || view->logical_height <= 0)
+        return;
+    /* The logical rect's screen corners, which carry origin AND offset. */
+    if (!ki_td_internal_screen_x(view, 0.0f, &origin_x) ||
+        !ki_td_internal_screen_y(view, 0.0f, &origin_y) ||
+        !ki_td_internal_screen_x(view, (float)view->logical_width, &end_x) ||
+        !ki_td_internal_screen_y(view, (float)view->logical_height, &end_y))
+        return;
+    span_x = end_x - origin_x;
+    span_y = end_y - origin_y;
+    if (span_x <= 0 || span_y <= 0) return;
+
+    canvas = &renderer->canvas;
+    if (canvas->clip_x1 <= canvas->clip_x0 ||
+        canvas->clip_y1 <= canvas->clip_y0)
+        return;
+    first_x = origin_x < canvas->clip_x0 ? canvas->clip_x0 : origin_x;
+    first_y = origin_y < canvas->clip_y0 ? canvas->clip_y0 : origin_y;
+    last_x = end_x > canvas->clip_x1 ? canvas->clip_x1 : end_x;
+    last_y = end_y > canvas->clip_y1 ? canvas->clip_y1 : end_y;
+
+    for (screen_y = first_y; screen_y < last_y; ++screen_y) {
+        int screen_x;
+        int source_y = (int)((int64_t)(screen_y - origin_y) *
+                             (int64_t)image->height / (int64_t)span_y);
+        if (source_y < 0) source_y = 0;
+        if (source_y >= image->height) source_y = image->height - 1;
+        for (screen_x = first_x; screen_x < last_x; ++screen_x) {
+            int source_x = (int)((int64_t)(screen_x - origin_x) *
+                                 (int64_t)image->width / (int64_t)span_x);
+            if (source_x < 0) source_x = 0;
+            if (source_x >= image->width) source_x = image->width - 1;
+            blend_rgba_pixel(renderer, screen_x, screen_y,
+                             image_pixel(image, source_x, source_y),
+                             selected);
+        }
+    }
+}
+
 void ki_td_soft_rgba_tinted(ki_td_soft_renderer *renderer,
                             const ki_td_view *view, float x, float y,
                             const ki_td_rgba8 *image, int width, int height,

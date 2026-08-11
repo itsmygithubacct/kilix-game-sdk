@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 - 2026-08-11
+
+- Add `ki_td_soft_rgba_backdrop`, a full-canvas blit that samples per screen
+  pixel instead of per logical cell, so a backdrop plate authored above the
+  logical size keeps its detail and maps 1:1 at `scale = plate / logical`.
+  `ki_td_soft_rgba_resized` samples once per logical cell, which is correct
+  for sprites quantized to logical space and discards most of a large
+  plate's columns when it fills the screen. Existing callers are unchanged.
+
 ## 0.3.2 - 2026-08-09
 
 - Reject non-finite and unrepresentable transforms and geometry before they

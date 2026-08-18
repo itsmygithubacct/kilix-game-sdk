@@ -84,6 +84,17 @@ static uint64_t render(uint32_t width, uint32_t height,
     return conf_hash(result.color,(size_t)width*height);
 }
 
+static void render_mip(kr3d_mesh_handle quad,kr3d_material_handle material)
+{
+    kr3d_error error={0};kr3d_frame_desc frame={sizeof frame,64,64,NULL,NULL,CONF_CLEAR,
+        {{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}},{{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}},
+        {0,0,-1},1,0};assert(frame_begin(device,&frame,&error));
+    kr3d_draw_desc draw={sizeof draw,quad,material,kr3d_mat4_mul(
+        kr3d_mat4_translate((kr3d_vec3){.05f,.05f,0}),kr3d_mat4_scale((kr3d_vec3){.1f,.1f,1}))};
+    assert(draw_submit(device,&draw,&error));kr3d_frame_result result={.struct_size=sizeof result};
+    assert(frame_end(device,&result,&error));check_color(result.color[32u*64u+32u],CONF_BLUE,"mip minification LOD");
+}
+
 int main(void)
 {
 #ifdef KR3D_CONFORMANCE_GL
@@ -100,7 +111,7 @@ int main(void)
     context=eglCreateContext(display,config,EGL_NO_CONTEXT,xa); assert(context!=EGL_NO_CONTEXT);
     assert(eglMakeCurrent(display,surface,surface,context));
 #endif
-    kr3d_error error={0}; kr3d_device_desc dd={sizeof dd,4,2,4,96,96};
+    kr3d_error error={0}; kr3d_device_desc dd={sizeof dd,4,2,6,96,96};
 #ifdef KR3D_CONFORMANCE_GL
     kr3d_gl_options options={sizeof options,true,true,KR3D_GL_FAULT_NONE}; assert(device_create(&dd,&options,&error));
 #else
@@ -115,7 +126,7 @@ int main(void)
     md=(kr3d_mesh_desc){sizeof md,conf_clip_vertices,3,conf_clip_indices,3};
     assert(mesh_create(device,&md,&clip,&error));
     kr3d_texture_handle tex=0; kr3d_texture_desc td={sizeof td,2,2,conf_texels,
-        KR3D_FILTER_NEAREST,KR3D_ADDRESS_CLAMP,KR3D_ADDRESS_CLAMP};
+        KR3D_FILTER_NEAREST,KR3D_ADDRESS_CLAMP,KR3D_ADDRESS_CLAMP,0,NULL};
     assert(texture_create(device,&td,&tex,&error));
     kr3d_material_handle textured=0,red=0,green=0,blue=0;
     kr3d_material_desc mat={sizeof mat,tex,UINT32_MAX,KR3D_MATERIAL_UNLIT,
@@ -123,6 +134,13 @@ int main(void)
 #define MAKE_MATERIAL(out,color) do { mat.texture=0;mat.rgba=(color); \
     assert(material_create(device,&mat,&(out),&error)); } while(0)
     MAKE_MATERIAL(red,CONF_RED); MAKE_MATERIAL(green,CONF_GREEN); MAKE_MATERIAL(blue,CONF_BLUE);
+    uint32_t mip_pixels[85];for(size_t i=0;i<64;++i)mip_pixels[i]=CONF_RED;
+    for(size_t i=64;i<80;++i)mip_pixels[i]=CONF_GREEN;
+    for(size_t i=80;i<85;++i)mip_pixels[i]=CONF_BLUE;
+    kr3d_texture_handle mip=0;td=(kr3d_texture_desc){sizeof td,8,8,mip_pixels,KR3D_FILTER_NEAREST,
+        KR3D_ADDRESS_CLAMP,KR3D_ADDRESS_CLAMP,4,mip_pixels};assert(texture_create(device,&td,&mip,&error));
+    kr3d_material_handle mip_material=0;mat.texture=mip;mat.rgba=UINT32_MAX;
+    assert(material_create(device,&mat,&mip_material,&error));render_mip(quad,mip_material);
     uint64_t first=render(64,64,quad,tri,back,clip,textured,red,green,blue);
     (void)render(80,48,quad,tri,back,clip,textured,red,green,blue);
 #ifndef KR3D_CONFORMANCE_GL

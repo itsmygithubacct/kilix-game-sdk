@@ -83,11 +83,16 @@ bool kr3d_mesh_file_encode(const kr3d_mesh_desc *mesh, uint32_t material_slot_co
 void kr3d_mesh_file_bytes_free(void *bytes);
 void kr3d_mesh_data_release(kr3d_mesh_data *data);
 typedef struct { size_t struct_size; uint32_t width, height; const uint32_t *rgba;
-    kr3d_filter filter; kr3d_address address_u, address_v; } kr3d_texture_desc;
+    kr3d_filter filter; kr3d_address address_u, address_v;
+    /* Appended ABI fields. mip_count 0/1 uses rgba. Larger chains use the
+       tightly packed mip_rgba array, including level zero. */
+    uint32_t mip_count; const uint32_t *mip_rgba; } kr3d_texture_desc;
 /* Replaces a tightly packed rectangular texel region without changing the
    texture handle, dimensions, sampler state, or referencing materials. */
 typedef struct { size_t struct_size; uint32_t x, y, width, height;
-    const uint32_t *rgba; } kr3d_texture_update_desc;
+    const uint32_t *rgba;
+    /* Appended ABI field. Older descriptors update level zero. */
+    uint32_t mip_level; } kr3d_texture_update_desc;
 enum { KR3D_MATERIAL_UNLIT = 1u, KR3D_MATERIAL_TWO_SIDED = 2u,
        KR3D_MATERIAL_EMISSIVE = 4u };
 typedef struct { size_t struct_size; kr3d_texture_handle texture; uint32_t rgba;

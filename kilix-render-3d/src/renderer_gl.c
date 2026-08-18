@@ -9,7 +9,7 @@
 #include <string.h>
 
 typedef struct { GLuint vao, vbo, ebo; GLsizei count; } gl_mesh;
-typedef struct { GLuint name; uint32_t width,height; } gl_texture;
+typedef struct { GLuint name; uint32_t width,height,levels; } gl_texture;
 typedef struct {
     kr3d_texture_handle texture;
     uint32_t rgba, flags;
@@ -258,27 +258,33 @@ void kr3d_gl_mesh_destroy(kr3d_gl_device*d,kr3d_mesh_handle h)
 bool kr3d_gl_texture_create(kr3d_gl_device*d,const kr3d_texture_desc*s,
                             kr3d_texture_handle*out,kr3d_error*e)
 {
+    uint32_t levels=1,w,hgt;size_t offset=0;
     if(out)*out=0;
-    if(!d||!s||!out||s->struct_size<sizeof*s||!s->rgba||!s->width||!s->height||s->width>d->max_width||s->height>d->max_height||(size_t)s->width>SIZE_MAX/(size_t)s->height/4u)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL texture");
+    if(!d||!s||!out||s->struct_size<offsetof(kr3d_texture_desc,mip_count)||!s->rgba||!s->width||!s->height||s->width>d->max_width||s->height>d->max_height)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL texture");
+    if(s->struct_size>=sizeof*s&&s->mip_count){uint32_t mw=s->width,mh=s->height,max=1;while(mw>1||mh>1){mw=mw>1?mw/2:1;mh=mh>1?mh/2:1;++max;}levels=s->mip_count;if(levels>max||(!s->mip_rgba&&levels>1))return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL mip chain");}
     uint32_t h=1;while(h<=d->max_textures&&d->textures[h].name)++h;
     if(h>d->max_textures)return fail(e,KR3D_ERROR_LIMIT,"GL texture limit reached");
     GLuint*n=&d->textures[h].name;glGenTextures(1,n);glBindTexture(GL_TEXTURE_2D,*n);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,s->filter==KR3D_FILTER_NEAREST?GL_NEAREST:GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,levels>1?(s->filter==KR3D_FILTER_NEAREST?GL_NEAREST_MIPMAP_NEAREST:GL_LINEAR_MIPMAP_NEAREST):(s->filter==KR3D_FILTER_NEAREST?GL_NEAREST:GL_LINEAR));
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,s->filter==KR3D_FILTER_NEAREST?GL_NEAREST:GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,s->address_u==KR3D_ADDRESS_REPEAT?GL_REPEAT:GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,s->address_v==KR3D_ADDRESS_REPEAT?GL_REPEAT:GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT,1);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,(GLsizei)s->width,(GLsizei)s->height,0,GL_RGBA,GL_UNSIGNED_BYTE,s->rgba);
-    if(!gl_ok(e,"GL texture upload failed")){kr3d_gl_texture_destroy(d,h);return false;}d->textures[h].width=s->width;d->textures[h].height=s->height;*out=h;return true;
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);w=s->width;hgt=s->height;for(uint32_t level=0;level<levels;++level){const uint32_t*p=levels>1?s->mip_rgba+offset:s->rgba;glTexImage2D(GL_TEXTURE_2D,(GLint)level,GL_RGBA8,(GLsizei)w,(GLsizei)hgt,0,GL_RGBA,GL_UNSIGNED_BYTE,p);offset+=(size_t)w*hgt;w=w>1?w/2:1;hgt=hgt>1?hgt/2:1;}
+    if(!gl_ok(e,"GL texture upload failed")){kr3d_gl_texture_destroy(d,h);return false;}d->textures[h].width=s->width;d->textures[h].height=s->height;d->textures[h].levels=levels;*out=h;return true;
 }
 
 bool kr3d_gl_texture_update(kr3d_gl_device*d,kr3d_texture_handle h,
                             const kr3d_texture_update_desc*s,kr3d_error*e)
 {
-    if(!d||!s||s->struct_size<sizeof*s||!s->rgba||!s->width||!s->height||!h||h>d->max_textures||!d->textures[h].name)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL texture update");
+    uint32_t level=0,w,hgt;if(!d||!s||s->struct_size<offsetof(kr3d_texture_update_desc,mip_level)||!s->rgba||!s->width||!s->height||!h||h>d->max_textures||!d->textures[h].name)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL texture update");
     gl_texture*t=&d->textures[h];
-    if(s->width>t->width||s->height>t->height||s->x>t->width-s->width||s->y>t->height-s->height||(size_t)s->width>SIZE_MAX/(size_t)s->height/sizeof(uint32_t))return fail(e,KR3D_ERROR_ARGUMENT,"GL texture update is out of bounds");
+    if(s->struct_size>=sizeof*s)level=s->mip_level;
+    if(level>=t->levels)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL mip level");
+    w=t->width;hgt=t->height;
+    for(uint32_t i=0;i<level;++i){w=w>1?w/2:1;hgt=hgt>1?hgt/2:1;}
+    if(s->width>w||s->height>hgt||s->x>w-s->width||s->y>hgt-s->height||(size_t)s->width>SIZE_MAX/(size_t)s->height/sizeof(uint32_t))return fail(e,KR3D_ERROR_ARGUMENT,"GL texture update is out of bounds");
     glBindTexture(GL_TEXTURE_2D,t->name);glPixelStorei(GL_UNPACK_ALIGNMENT,1);
-    glTexSubImage2D(GL_TEXTURE_2D,0,(GLint)s->x,(GLint)s->y,(GLsizei)s->width,(GLsizei)s->height,GL_RGBA,GL_UNSIGNED_BYTE,s->rgba);
+    glTexSubImage2D(GL_TEXTURE_2D,(GLint)level,(GLint)s->x,(GLint)s->y,(GLsizei)s->width,(GLsizei)s->height,GL_RGBA,GL_UNSIGNED_BYTE,s->rgba);
     return gl_ok(e,"GL texture update failed");
 }
 

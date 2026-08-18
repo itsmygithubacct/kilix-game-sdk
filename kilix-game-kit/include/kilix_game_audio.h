@@ -112,8 +112,14 @@ bool kilix_game_audio_is_running(kilix_game_audio *audio);
 
 int kilix_game_audio_play(kilix_game_audio *audio, uint32_t cue,
                           kilix_game_audio_bus bus, float gain, float pitch);
+int kilix_game_audio_play_pan(kilix_game_audio *audio, uint32_t cue,
+                              kilix_game_audio_bus bus, float gain,
+                              float pitch, float pan);
 int kilix_game_audio_loop(kilix_game_audio *audio, uint32_t cue,
                           kilix_game_audio_bus bus, float gain, float pitch);
+int kilix_game_audio_loop_pan(kilix_game_audio *audio, uint32_t cue,
+                              kilix_game_audio_bus bus, float gain,
+                              float pitch, float pan);
 
 void kilix_game_audio_set_bus(kilix_game_audio *audio,
                               kilix_game_audio_bus bus, float gain);

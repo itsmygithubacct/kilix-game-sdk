@@ -304,19 +304,33 @@ static float effective_gain(const kilix_game_audio *audio,
 int kilix_game_audio_play(kilix_game_audio *audio, uint32_t cue,
                           kilix_game_audio_bus bus, float gain, float pitch)
 {
+    return kilix_game_audio_play_pan(audio, cue, bus, gain, pitch, 0.0f);
+}
+
+int kilix_game_audio_play_pan(kilix_game_audio *audio, uint32_t cue,
+                              kilix_game_audio_bus bus, float gain,
+                              float pitch, float pan)
+{
     if (!audio || !audio->ready || !audio->mixer_started || !valid_bus(bus))
         return -1;
-    return pcmmix_bank_play(&audio->mixer, &audio->bank, cue,
-                            effective_gain(audio, bus, gain), pitch);
+    return pcmmix_bank_play_pan(&audio->mixer, &audio->bank, cue,
+                                effective_gain(audio, bus, gain), pitch, pan);
 }
 
 int kilix_game_audio_loop(kilix_game_audio *audio, uint32_t cue,
                           kilix_game_audio_bus bus, float gain, float pitch)
 {
+    return kilix_game_audio_loop_pan(audio, cue, bus, gain, pitch, 0.0f);
+}
+
+int kilix_game_audio_loop_pan(kilix_game_audio *audio, uint32_t cue,
+                              kilix_game_audio_bus bus, float gain,
+                              float pitch, float pan)
+{
     if (!audio || !audio->ready || !audio->mixer_started || !valid_bus(bus))
         return -1;
-    return pcmmix_bank_loop(&audio->mixer, &audio->bank, cue,
-                            effective_gain(audio, bus, gain), pitch);
+    return pcmmix_bank_loop_pan(&audio->mixer, &audio->bank, cue,
+                                effective_gain(audio, bus, gain), pitch, pan);
 }
 
 static void refresh_music_gain(kilix_game_audio *audio)

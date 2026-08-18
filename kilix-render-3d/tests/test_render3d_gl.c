@@ -1,6 +1,7 @@
 #include "kr3d_gl.h"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,13 @@ int main(void)
     const kr3d_vertex vertices[]={{{-0.8f,-0.8f,0.0f},{0,0,1},{0,0},UINT32_C(0xff0000ff)},{{0.8f,-0.8f,0.0f},{0,0,1},{1,0},UINT32_C(0xff0000ff)},{{0.0f,0.8f,0.0f},{0,0,1},{0,1},UINT32_C(0xff0000ff)}};const uint32_t indices[]={0,1,2};kr3d_mesh_desc md={sizeof md,vertices,3,indices,3};CHECK(kr3d_gl_mesh_create(device,&md,&mesh,&error));
     kr3d_material_desc mat={sizeof mat,texture,UINT32_C(0xffffffff),KR3D_MATERIAL_UNLIT,KR3D_ALPHA_OPAQUE,0,1,0};CHECK(kr3d_gl_material_create(device,&mat,&material,&error));kr3d_frame_desc frame={sizeof frame,64,64,NULL,NULL,UINT32_C(0xff0d0b07),kr3d_mat4_identity(),kr3d_mat4_identity(),{0,0,-1},0.2f,0.8f};CHECK(kr3d_gl_frame_begin(device,&frame,&error));kr3d_draw_desc draw={sizeof draw,mesh,material,kr3d_mat4_identity()};CHECK(kr3d_gl_draw(device,&draw,&error));kr3d_frame_result output={.struct_size=sizeof output};CHECK(kr3d_gl_frame_end(device,&output,&error));
     CHECK(output.color&&output.depth&&output.width==64&&output.height==64);CHECK(output.submitted_triangles==1&&output.rasterized_triangles==1);uint32_t center=output.color[32u*64u+32u];CHECK((center&UINT32_C(0x00ffffff))==UINT32_C(0x000000ff));CHECK(output.depth[32u*64u+32u]>0.49f&&output.depth[32u*64u+32u]<0.51f);{kr3d_material_handle lit=0;mat.flags=0;CHECK(kr3d_gl_material_create(device,&mat,&lit,&error));CHECK(kr3d_gl_frame_begin(device,&frame,&error));draw.material=lit;draw.model=kr3d_mat4_scale((kr3d_vec3){1,1,0});CHECK(!kr3d_gl_draw(device,&draw,&error)&&error.code==KR3D_ERROR_ARGUMENT);CHECK(kr3d_gl_frame_end(device,&output,&error));kr3d_gl_material_destroy(device,lit);}result=EXIT_SUCCESS;
+    {kr3d_gl_instance_desc instances[2]={{sizeof instances[0],{{1,0,0,0,0,1,0,0,0,0,1,0,-.35f,0,0,1}},{1,1},{0,0}},
+                                        {sizeof instances[0],{{1,0,0,0,0,1,0,0,0,0,1,0,.35f,0,0,1}},{.5f,1},{.5f,0}}};
+     draw.material=material;CHECK(kr3d_gl_frame_begin(device,&frame,&error));
+     CHECK(kr3d_gl_draw_instanced(device,&draw,instances,2,&error));
+     CHECK(!kr3d_gl_draw_instanced(device,&draw,instances,0,&error)&&error.code==KR3D_ERROR_ARGUMENT);
+     instances[1].uv_scale[0]=NAN;CHECK(!kr3d_gl_draw_instanced(device,&draw,instances,2,&error)&&error.code==KR3D_ERROR_ARGUMENT);
+     CHECK(kr3d_gl_frame_end(device,&output,&error));CHECK(output.submitted_triangles==2&&output.rasterized_triangles==2);}
 done:
     if(result!=EXIT_SUCCESS&&device)fprintf(stderr,"GL backend: %s\n",kr3d_gl_renderer(device));
     kr3d_gl_material_destroy(device,material);kr3d_gl_texture_destroy(device,texture);kr3d_gl_mesh_destroy(device,mesh);kr3d_gl_device_destroy(device);

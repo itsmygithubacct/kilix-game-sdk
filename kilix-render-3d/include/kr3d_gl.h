@@ -14,6 +14,13 @@ extern "C" {
  */
 typedef struct kr3d_gl_device kr3d_gl_device;
 
+#define KR3D_GL_MAX_INSTANCES 32u
+typedef struct {
+    size_t struct_size;
+    kr3d_mat4 model;
+    float uv_scale[2], uv_offset[2];
+} kr3d_gl_instance_desc;
+
 /* Deterministic verification hooks. Production callers leave fault at NONE. */
 typedef enum {
     KR3D_GL_FAULT_NONE = 0,
@@ -57,6 +64,10 @@ bool kr3d_gl_frame_begin(kr3d_gl_device *device,
                           const kr3d_frame_desc *desc, kr3d_error *error);
 bool kr3d_gl_draw(kr3d_gl_device *device, const kr3d_draw_desc *desc,
                    kr3d_error *error);
+bool kr3d_gl_draw_instanced(kr3d_gl_device *device,
+                            const kr3d_draw_desc *desc,
+                            const kr3d_gl_instance_desc *instances,
+                            uint32_t instance_count, kr3d_error *error);
 bool kr3d_gl_frame_end(kr3d_gl_device *device, kr3d_frame_result *result,
                         kr3d_error *error);
 

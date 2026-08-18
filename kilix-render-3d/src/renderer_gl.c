@@ -27,6 +27,7 @@ struct kr3d_gl_device {
     GLint u_mvp, u_normal, u_light, u_ambient, u_directional;
     GLint u_material, u_texture, u_use_texture, u_unlit, u_alpha_mode;
     GLint u_alpha_cutoff, u_roughness, u_specular;
+    GLint u_instanced, u_view_projection, u_instance_model, u_instance_uv;
     bool frame, read_color, read_depth;
     uint32_t width, height, submitted, rasterized;
     uint32_t *color;
@@ -99,10 +100,16 @@ static GLuint make_program(kr3d_gl_fault fault, kr3d_error *e)
         "layout(location=1) in vec3 a_normal;\n"
         "layout(location=2) in vec2 a_uv;\n"
         "layout(location=3) in vec4 a_color;\n"
-        "uniform mat4 u_mvp; uniform mat3 u_normal;\n"
+        "uniform mat4 u_mvp,u_view_projection; uniform mat3 u_normal;\n"
+        "uniform int u_instanced; uniform mat4 u_instance_model[32];"
+        "uniform vec4 u_instance_uv[32];\n"
         "out vec3 v_normal; out vec2 v_uv; out vec4 v_color;\n"
-        "void main(){ gl_Position=u_mvp*vec4(a_position,1.0);"
-        "v_normal=u_normal*a_normal; v_uv=a_uv; v_color=a_color; }\n";
+        "void main(){ if(u_instanced!=0){mat4 model=u_instance_model[gl_InstanceID];"
+        "gl_Position=u_view_projection*model*vec4(a_position,1.0);"
+        "v_normal=transpose(inverse(mat3(model)))*a_normal;"
+        "vec4 uv=u_instance_uv[gl_InstanceID];v_uv=a_uv*uv.xy+uv.zw;}else{"
+        "gl_Position=u_mvp*vec4(a_position,1.0);v_normal=u_normal*a_normal;v_uv=a_uv;}"
+        "v_color=a_color; }\n";
     static const char fragment_source[] =
         "#version 330 core\n"
         "in vec3 v_normal; in vec2 v_uv; in vec4 v_color;\n"
@@ -196,6 +203,10 @@ bool kr3d_gl_device_create(const kr3d_device_desc *desc,
     d->u_alpha_cutoff=glGetUniformLocation(d->program,"u_alpha_cutoff");
     d->u_roughness=glGetUniformLocation(d->program,"u_roughness");
     d->u_specular=glGetUniformLocation(d->program,"u_specular");
+    d->u_instanced=glGetUniformLocation(d->program,"u_instanced");
+    d->u_view_projection=glGetUniformLocation(d->program,"u_view_projection");
+    d->u_instance_model=glGetUniformLocation(d->program,"u_instance_model[0]");
+    d->u_instance_uv=glGetUniformLocation(d->program,"u_instance_uv[0]");
     (void)snprintf(d->renderer,sizeof d->renderer,"%.95s",(const char *)renderer);
     *out=d; if(e)e->code=KR3D_OK; return gl_ok(e,"GL device initialization failed");
 }
@@ -326,6 +337,44 @@ bool kr3d_gl_draw(kr3d_gl_device*d,const kr3d_draw_desc*s,kr3d_error*e)
     if(mat->flags&KR3D_MATERIAL_TWO_SIDED)glDisable(GL_CULL_FACE);else glEnable(GL_CULL_FACE);
     if(mat->alpha==KR3D_ALPHA_BLEND){glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);}else{glDisable(GL_BLEND);glDepthMask(GL_TRUE);}
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,mat->texture?d->textures[mat->texture].name:0);glBindVertexArray(m->vao);glDrawElements(GL_TRIANGLES,m->count,GL_UNSIGNED_INT,NULL);glBindVertexArray(0);d->submitted+=(uint32_t)m->count/3u;d->rasterized+=(uint32_t)m->count/3u;return gl_ok(e,"GL draw failed");
+}
+
+bool kr3d_gl_draw_instanced(kr3d_gl_device*d,const kr3d_draw_desc*s,
+                            const kr3d_gl_instance_desc*instances,
+                            uint32_t count,kr3d_error*e)
+{
+    GLfloat models[KR3D_GL_MAX_INSTANCES*16u],uvs[KR3D_GL_MAX_INSTANCES*4u];
+    if(d&&d->lost)return fail(e,KR3D_ERROR_DEVICE_LOST,"GL context is lost");
+    if(d&&d->fault==KR3D_GL_FAULT_DRAW_CONTEXT_LOST){d->lost=true;return fail(e,KR3D_ERROR_DEVICE_LOST,"injected GL context loss at instanced draw");}
+    if(!d||!s||s->struct_size<sizeof*s||!instances||!count||count>KR3D_GL_MAX_INSTANCES||
+       !d->frame||!s->mesh||s->mesh>d->max_meshes||!d->meshes[s->mesh].vao||
+       !s->material||s->material>d->max_materials||!d->materials[s->material].live)
+        return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL instanced draw");
+    gl_material*mat=&d->materials[s->material];bool lit=!(mat->flags&(KR3D_MATERIAL_UNLIT|KR3D_MATERIAL_EMISSIVE));
+    for(uint32_t i=0;i<count;++i){GLfloat normal[9];if(instances[i].struct_size<sizeof instances[i]||
+       !finite_matrix(instances[i].model)||!isfinite(instances[i].uv_scale[0])||
+       !isfinite(instances[i].uv_scale[1])||!isfinite(instances[i].uv_offset[0])||
+       !isfinite(instances[i].uv_offset[1])||(lit&&!normal_matrix(instances[i].model,normal)))
+        return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL instance");
+       memcpy(models+(size_t)i*16u,instances[i].model.m,16u*sizeof(float));
+       memcpy(uvs+(size_t)i*4u,instances[i].uv_scale,2u*sizeof(float));
+       memcpy(uvs+(size_t)i*4u+2u,instances[i].uv_offset,2u*sizeof(float));}
+    gl_mesh*m=&d->meshes[s->mesh];float*scratch=d->depth;kr3d_mat4 view,projection;
+    memcpy(view.m,scratch,16u*sizeof(float));memcpy(projection.m,scratch+16,16u*sizeof(float));
+    kr3d_mat4 vp=kr3d_mat4_mul(projection,view);GLfloat rgba[4];unpack_rgba(mat->rgba,rgba);
+    glUniform1i(d->u_instanced,1);glUniformMatrix4fv(d->u_view_projection,1,GL_FALSE,vp.m);
+    glUniformMatrix4fv(d->u_instance_model,(GLsizei)count,GL_FALSE,models);
+    glUniform4fv(d->u_instance_uv,(GLsizei)count,uvs);glUniform4fv(d->u_material,1,rgba);
+    glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,lit?0:1);
+    glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);
+    glUniform1f(d->u_roughness,mat->roughness);glUniform1f(d->u_specular,mat->specular);
+    if(mat->flags&KR3D_MATERIAL_TWO_SIDED)glDisable(GL_CULL_FACE);else glEnable(GL_CULL_FACE);
+    if(mat->alpha==KR3D_ALPHA_BLEND){glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);}else{glDisable(GL_BLEND);glDepthMask(GL_TRUE);}
+    glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,mat->texture?d->textures[mat->texture].name:0);
+    glBindVertexArray(m->vao);glDrawElementsInstanced(GL_TRIANGLES,m->count,GL_UNSIGNED_INT,NULL,(GLsizei)count);
+    glBindVertexArray(0);glUniform1i(d->u_instanced,0);
+    uint32_t triangles=(uint32_t)m->count/3u;d->submitted+=triangles*count;d->rasterized+=triangles*count;
+    return gl_ok(e,"GL instanced draw failed");
 }
 
 static void flip_rows(void*data,uint32_t w,uint32_t h,size_t element)

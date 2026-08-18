@@ -24,7 +24,7 @@ struct kr3d_gl_device {
     gl_material *materials;
     uint32_t max_meshes, max_textures, max_materials, max_width, max_height;
     GLuint program;
-    GLint u_mvp, u_model, u_light, u_ambient, u_directional;
+    GLint u_mvp, u_normal, u_light, u_ambient, u_directional;
     GLint u_material, u_texture, u_use_texture, u_unlit, u_alpha_mode;
     GLint u_alpha_cutoff;
     bool frame, read_color, read_depth;
@@ -46,6 +46,19 @@ static bool fail(kr3d_error *e, kr3d_error_code c, const char *message)
 static bool finite_matrix(kr3d_mat4 m)
 {
     for (size_t i = 0; i < 16u; ++i) if (!isfinite(m.m[i])) return false;
+    return true;
+}
+
+static bool normal_matrix(kr3d_mat4 m, GLfloat out[9])
+{
+    float a=m.m[0],b=m.m[4],c=m.m[8],d=m.m[1],ee=m.m[5],f=m.m[9],
+          g=m.m[2],h=m.m[6],i=m.m[10];
+    float det=a*(ee*i-f*h)-b*(d*i-f*g)+c*(d*h-ee*g);
+    if(!isfinite(det)||fabsf(det)<1e-12f)return false;
+    float inv=1.0f/det;
+    out[0]=(ee*i-f*h)*inv;out[3]=(f*g-d*i)*inv;out[6]=(d*h-ee*g)*inv;
+    out[1]=(c*h-b*i)*inv;out[4]=(a*i-c*g)*inv;out[7]=(b*g-a*h)*inv;
+    out[2]=(b*f-c*ee)*inv;out[5]=(c*d-a*f)*inv;out[8]=(a*ee-b*d)*inv;
     return true;
 }
 
@@ -84,10 +97,10 @@ static GLuint make_program(kr3d_error *e)
         "layout(location=1) in vec3 a_normal;\n"
         "layout(location=2) in vec2 a_uv;\n"
         "layout(location=3) in vec4 a_color;\n"
-        "uniform mat4 u_mvp; uniform mat4 u_model;\n"
+        "uniform mat4 u_mvp; uniform mat3 u_normal;\n"
         "out vec3 v_normal; out vec2 v_uv; out vec4 v_color;\n"
         "void main(){ gl_Position=u_mvp*vec4(a_position,1.0);"
-        "v_normal=mat3(u_model)*a_normal; v_uv=a_uv; v_color=a_color; }\n";
+        "v_normal=u_normal*a_normal; v_uv=a_uv; v_color=a_color; }\n";
     static const char fragment_source[] =
         "#version 330 core\n"
         "in vec3 v_normal; in vec2 v_uv; in vec4 v_color;\n"
@@ -156,7 +169,7 @@ bool kr3d_gl_device_create(const kr3d_device_desc *desc,
     d->program=make_program(e);
     if (!d->program) { kr3d_gl_device_destroy(d); return false; }
     d->u_mvp=glGetUniformLocation(d->program,"u_mvp");
-    d->u_model=glGetUniformLocation(d->program,"u_model");
+    d->u_normal=glGetUniformLocation(d->program,"u_normal");
     d->u_light=glGetUniformLocation(d->program,"u_light");
     d->u_ambient=glGetUniformLocation(d->program,"u_ambient");
     d->u_directional=glGetUniformLocation(d->program,"u_directional");
@@ -268,8 +281,8 @@ bool kr3d_gl_frame_begin(kr3d_gl_device*d,const kr3d_frame_desc*s,kr3d_error*e)
 bool kr3d_gl_draw(kr3d_gl_device*d,const kr3d_draw_desc*s,kr3d_error*e)
 {
     if(!d||!s||s->struct_size<sizeof*s||!d->frame||!s->mesh||s->mesh>d->max_meshes||!d->meshes[s->mesh].vao||!s->material||s->material>d->max_materials||!d->materials[s->material].live||!finite_matrix(s->model))return fail(e,KR3D_ERROR_STATE,"invalid GL draw");
-    gl_mesh*m=&d->meshes[s->mesh];gl_material*mat=&d->materials[s->material];float*scratch=d->depth;kr3d_mat4 view,projection;memcpy(view.m,scratch,16u*sizeof(float));memcpy(projection.m,scratch+16,16u*sizeof(float));kr3d_mat4 mvp=kr3d_mat4_mul(projection,kr3d_mat4_mul(view,s->model));GLfloat rgba[4];unpack_rgba(mat->rgba,rgba);
-    glUniformMatrix4fv(d->u_mvp,1,GL_FALSE,mvp.m);glUniformMatrix4fv(d->u_model,1,GL_FALSE,s->model.m);glUniform4fv(d->u_material,1,rgba);glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,(mat->flags&(KR3D_MATERIAL_UNLIT|KR3D_MATERIAL_EMISSIVE))?1:0);glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);
+    gl_mesh*m=&d->meshes[s->mesh];gl_material*mat=&d->materials[s->material];float*scratch=d->depth;kr3d_mat4 view,projection;GLfloat normal[9];bool lit=!(mat->flags&(KR3D_MATERIAL_UNLIT|KR3D_MATERIAL_EMISSIVE));if(lit&&!normal_matrix(s->model,normal))return fail(e,KR3D_ERROR_ARGUMENT,"singular GL model normal matrix");if(!lit){normal[0]=normal[4]=normal[8]=1;normal[1]=normal[2]=normal[3]=normal[5]=normal[6]=normal[7]=0;}memcpy(view.m,scratch,16u*sizeof(float));memcpy(projection.m,scratch+16,16u*sizeof(float));kr3d_mat4 mvp=kr3d_mat4_mul(projection,kr3d_mat4_mul(view,s->model));GLfloat rgba[4];unpack_rgba(mat->rgba,rgba);
+    glUniformMatrix4fv(d->u_mvp,1,GL_FALSE,mvp.m);glUniformMatrix3fv(d->u_normal,1,GL_FALSE,normal);glUniform4fv(d->u_material,1,rgba);glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,lit?0:1);glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);
     if(mat->flags&KR3D_MATERIAL_TWO_SIDED)glDisable(GL_CULL_FACE);else glEnable(GL_CULL_FACE);
     if(mat->alpha==KR3D_ALPHA_BLEND){glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);}else{glDisable(GL_BLEND);glDepthMask(GL_TRUE);}
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,mat->texture?d->textures[mat->texture].name:0);glBindVertexArray(m->vao);glDrawElements(GL_TRIANGLES,m->count,GL_UNSIGNED_INT,NULL);glBindVertexArray(0);d->submitted+=(uint32_t)m->count/3u;d->rasterized+=(uint32_t)m->count/3u;return gl_ok(e,"GL draw failed");

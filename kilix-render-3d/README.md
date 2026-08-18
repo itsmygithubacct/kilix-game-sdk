@@ -22,6 +22,14 @@ Include `include/kr3d.h`, initialize every extensible descriptor's
 calls, and `frame_end`. A frame may use caller-owned color/depth buffers or let
 the device retain reusable targets. All calls are render-thread confined.
 
+`kr3d_texture_update` replaces a tightly packed, row-major RGBA8 rectangle
+inside an existing texture. The rectangle must be non-empty and wholly bounded
+by the original dimensions. Invalid device, handle, descriptor, data, or bounds
+fail before storage is changed; the handle, sampler state, and referencing
+materials remain valid. The optional backend provides the matching
+`kr3d_gl_texture_update` operation using `glTexSubImage2D`, allowing frequently
+changing HUD textures to avoid resource recreation.
+
 ## Cooked mesh transport
 
 `kr3d_mesh_file_encode` and `kr3d_mesh_file_decode` implement the portable

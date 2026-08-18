@@ -31,6 +31,10 @@ void kr3d_gl_mesh_destroy(kr3d_gl_device *device, kr3d_mesh_handle handle);
 bool kr3d_gl_texture_create(kr3d_gl_device *device,
                             const kr3d_texture_desc *desc,
                             kr3d_texture_handle *out, kr3d_error *error);
+bool kr3d_gl_texture_update(kr3d_gl_device *device,
+                            kr3d_texture_handle handle,
+                            const kr3d_texture_update_desc *desc,
+                            kr3d_error *error);
 void kr3d_gl_texture_destroy(kr3d_gl_device *device,
                              kr3d_texture_handle handle);
 bool kr3d_gl_material_create(kr3d_gl_device *device,

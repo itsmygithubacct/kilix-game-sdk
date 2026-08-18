@@ -9,7 +9,7 @@
 #include <string.h>
 
 typedef struct { GLuint vao, vbo, ebo; GLsizei count; } gl_mesh;
-typedef struct { GLuint name; } gl_texture;
+typedef struct { GLuint name; uint32_t width,height; } gl_texture;
 typedef struct {
     kr3d_texture_handle texture;
     uint32_t rgba, flags;
@@ -251,11 +251,22 @@ bool kr3d_gl_texture_create(kr3d_gl_device*d,const kr3d_texture_desc*s,
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,s->address_u==KR3D_ADDRESS_REPEAT?GL_REPEAT:GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,s->address_v==KR3D_ADDRESS_REPEAT?GL_REPEAT:GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT,1);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,(GLsizei)s->width,(GLsizei)s->height,0,GL_RGBA,GL_UNSIGNED_BYTE,s->rgba);
-    if(!gl_ok(e,"GL texture upload failed")){kr3d_gl_texture_destroy(d,h);return false;}*out=h;return true;
+    if(!gl_ok(e,"GL texture upload failed")){kr3d_gl_texture_destroy(d,h);return false;}d->textures[h].width=s->width;d->textures[h].height=s->height;*out=h;return true;
+}
+
+bool kr3d_gl_texture_update(kr3d_gl_device*d,kr3d_texture_handle h,
+                            const kr3d_texture_update_desc*s,kr3d_error*e)
+{
+    if(!d||!s||s->struct_size<sizeof*s||!s->rgba||!s->width||!s->height||!h||h>d->max_textures||!d->textures[h].name)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL texture update");
+    gl_texture*t=&d->textures[h];
+    if(s->width>t->width||s->height>t->height||s->x>t->width-s->width||s->y>t->height-s->height||(size_t)s->width>SIZE_MAX/(size_t)s->height/sizeof(uint32_t))return fail(e,KR3D_ERROR_ARGUMENT,"GL texture update is out of bounds");
+    glBindTexture(GL_TEXTURE_2D,t->name);glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    glTexSubImage2D(GL_TEXTURE_2D,0,(GLint)s->x,(GLint)s->y,(GLsizei)s->width,(GLsizei)s->height,GL_RGBA,GL_UNSIGNED_BYTE,s->rgba);
+    return gl_ok(e,"GL texture update failed");
 }
 
 void kr3d_gl_texture_destroy(kr3d_gl_device*d,kr3d_texture_handle h)
-{if(d&&h&&h<=d->max_textures&&d->textures[h].name){glDeleteTextures(1,&d->textures[h].name);d->textures[h].name=0;}}
+{if(d&&h&&h<=d->max_textures&&d->textures[h].name){glDeleteTextures(1,&d->textures[h].name);memset(&d->textures[h],0,sizeof d->textures[h]);}}
 
 bool kr3d_gl_material_create(kr3d_gl_device*d,const kr3d_material_desc*s,
                              kr3d_material_handle*out,kr3d_error*e)

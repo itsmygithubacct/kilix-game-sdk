@@ -83,6 +83,10 @@ void kr3d_mesh_file_bytes_free(void *bytes);
 void kr3d_mesh_data_release(kr3d_mesh_data *data);
 typedef struct { size_t struct_size; uint32_t width, height; const uint32_t *rgba;
     kr3d_filter filter; kr3d_address address_u, address_v; } kr3d_texture_desc;
+/* Replaces a tightly packed rectangular texel region without changing the
+   texture handle, dimensions, sampler state, or referencing materials. */
+typedef struct { size_t struct_size; uint32_t x, y, width, height;
+    const uint32_t *rgba; } kr3d_texture_update_desc;
 enum { KR3D_MATERIAL_UNLIT = 1u, KR3D_MATERIAL_TWO_SIDED = 2u,
        KR3D_MATERIAL_EMISSIVE = 4u };
 typedef struct { size_t struct_size; kr3d_texture_handle texture; uint32_t rgba;
@@ -104,6 +108,9 @@ bool kr3d_mesh_create(kr3d_device *device, const kr3d_mesh_desc *desc,
 void kr3d_mesh_destroy(kr3d_device *device, kr3d_mesh_handle handle);
 bool kr3d_texture_create(kr3d_device *device, const kr3d_texture_desc *desc,
                          kr3d_texture_handle *out, kr3d_error *error);
+bool kr3d_texture_update(kr3d_device *device, kr3d_texture_handle handle,
+                         const kr3d_texture_update_desc *desc,
+                         kr3d_error *error);
 void kr3d_texture_destroy(kr3d_device *device, kr3d_texture_handle handle);
 bool kr3d_material_create(kr3d_device *device, const kr3d_material_desc *desc,
                           kr3d_material_handle *out, kr3d_error *error);

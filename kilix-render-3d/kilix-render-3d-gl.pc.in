@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: kilix-render-3d-gl
+Description: Optional OpenGL backend for kilix-render-3d
+Version: 0.1.0
+Requires: kilix-render-3d egl gl
+Libs: -L${libdir} -lkilix-render-3d-gl
+Cflags: -I${includedir}

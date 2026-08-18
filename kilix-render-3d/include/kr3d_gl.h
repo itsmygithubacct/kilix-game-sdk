@@ -14,10 +14,21 @@ extern "C" {
  */
 typedef struct kr3d_gl_device kr3d_gl_device;
 
+/* Deterministic verification hooks. Production callers leave fault at NONE. */
+typedef enum {
+    KR3D_GL_FAULT_NONE = 0,
+    KR3D_GL_FAULT_SHADER_COMPILE,
+    KR3D_GL_FAULT_PROGRAM_LINK,
+    KR3D_GL_FAULT_FRAME_BEGIN_CONTEXT_LOST,
+    KR3D_GL_FAULT_DRAW_CONTEXT_LOST,
+    KR3D_GL_FAULT_FRAME_END_CONTEXT_LOST
+} kr3d_gl_fault;
+
 typedef struct {
     size_t struct_size;
     bool readback_color;
     bool readback_depth;
+    kr3d_gl_fault fault;
 } kr3d_gl_options;
 
 bool kr3d_gl_device_create(const kr3d_device_desc *desc,

@@ -102,7 +102,7 @@ int main(void)
 #endif
     kr3d_error error={0}; kr3d_device_desc dd={sizeof dd,4,2,4,96,96};
 #ifdef KR3D_CONFORMANCE_GL
-    kr3d_gl_options options={sizeof options,true,true}; assert(device_create(&dd,&options,&error));
+    kr3d_gl_options options={sizeof options,true,true,KR3D_GL_FAULT_NONE}; assert(device_create(&dd,&options,&error));
 #else
     assert(device_create(&dd,NULL,&error));
 #endif

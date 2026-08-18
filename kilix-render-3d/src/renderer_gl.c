@@ -32,6 +32,8 @@ struct kr3d_gl_device {
     uint32_t *color;
     float *depth;
     char renderer[96];
+    kr3d_gl_fault fault;
+    bool lost;
 };
 
 static bool fail(kr3d_error *e, kr3d_error_code c, const char *message)
@@ -89,7 +91,7 @@ static GLuint compile_shader(GLenum kind, const char *source, kr3d_error *e)
     return 0;
 }
 
-static GLuint make_program(kr3d_error *e)
+static GLuint make_program(kr3d_gl_fault fault, kr3d_error *e)
 {
     static const char vertex_source[] =
         "#version 330 core\n"
@@ -113,8 +115,16 @@ static GLuint make_program(kr3d_error *e)
         "if(u_alpha_mode==1 && c.a<u_alpha_cutoff) discard;"
         "float l=u_unlit!=0?1.0:u_ambient+u_directional*max(0.0,dot(normalize(v_normal),-normalize(u_light)));"
         "color=vec4(c.rgb*l,c.a); }\n";
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, vertex_source, e);
-    GLuint fs = vs ? compile_shader(GL_FRAGMENT_SHADER, fragment_source, e) : 0;
+    static const char invalid_compile_source[] = "#version 330 core\nthis is not GLSL\n";
+    static const char invalid_link_source[] =
+        "#version 330 core\nin vec2 v_normal; out vec4 color;"
+        "void main(){color=vec4(v_normal,0,1);}\n";
+    const char *vs_source=fault==KR3D_GL_FAULT_SHADER_COMPILE?
+        invalid_compile_source:vertex_source;
+    const char *fs_source=fault==KR3D_GL_FAULT_PROGRAM_LINK?
+        invalid_link_source:fragment_source;
+    GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_source, e);
+    GLuint fs = vs ? compile_shader(GL_FRAGMENT_SHADER, fs_source, e) : 0;
     if (!vs || !fs) { if (vs) glDeleteShader(vs); return 0; }
     GLuint program = glCreateProgram();
     GLint ok = GL_FALSE;
@@ -145,7 +155,8 @@ bool kr3d_gl_device_create(const kr3d_device_desc *desc,
     if (!desc || !out || desc->struct_size < sizeof *desc ||
         !desc->max_meshes || !desc->max_textures || !desc->max_materials ||
         !desc->max_width || !desc->max_height ||
-        (options && options->struct_size < sizeof *options))
+        (options && (options->struct_size < sizeof *options ||
+         options->fault > KR3D_GL_FAULT_FRAME_END_CONTEXT_LOST)))
         return fail(e, KR3D_ERROR_ARGUMENT, "invalid GL device description");
     glGetIntegerv(GL_MAJOR_VERSION, &major); glGetIntegerv(GL_MINOR_VERSION, &minor);
     if (major < 3 || (major == 3 && minor < 3))
@@ -166,7 +177,8 @@ bool kr3d_gl_device_create(const kr3d_device_desc *desc,
         kr3d_gl_device_destroy(d);
         return fail(e, KR3D_ERROR_MEMORY, "GL resource table allocation failed");
     }
-    d->program=make_program(e);
+    d->fault=options?options->fault:KR3D_GL_FAULT_NONE;
+    d->program=make_program(d->fault,e);
     if (!d->program) { kr3d_gl_device_destroy(d); return false; }
     d->u_mvp=glGetUniformLocation(d->program,"u_mvp");
     d->u_normal=glGetUniformLocation(d->program,"u_normal");
@@ -280,6 +292,8 @@ void kr3d_gl_material_destroy(kr3d_gl_device*d,kr3d_material_handle h){if(d&&h&&
 
 bool kr3d_gl_frame_begin(kr3d_gl_device*d,const kr3d_frame_desc*s,kr3d_error*e)
 {
+    if(d&&d->lost)return fail(e,KR3D_ERROR_DEVICE_LOST,"GL context is lost");
+    if(d&&d->fault==KR3D_GL_FAULT_FRAME_BEGIN_CONTEXT_LOST){d->lost=true;return fail(e,KR3D_ERROR_DEVICE_LOST,"injected GL context loss at frame begin");}
     GLfloat c[4];if(!d||!s||s->struct_size<sizeof*s||d->frame||!s->width||!s->height||s->width>d->max_width||s->height>d->max_height||!finite_matrix(s->view)||!finite_matrix(s->projection)||!isfinite(s->ambient)||!isfinite(s->directional))return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL frame");
     d->width=s->width;d->height=s->height;d->submitted=d->rasterized=0;unpack_rgba(s->clear_rgba,c);
     glViewport(0,0,(GLsizei)s->width,(GLsizei)s->height);glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glDepthMask(GL_TRUE);glEnable(GL_CULL_FACE);glCullFace(GL_BACK);glFrontFace(GL_CCW);glEnable(GL_FRAMEBUFFER_SRGB);glDisable(GL_BLEND);glClearColor(c[0],c[1],c[2],c[3]);glClearDepth(1.0);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);glUseProgram(d->program);
@@ -291,6 +305,8 @@ bool kr3d_gl_frame_begin(kr3d_gl_device*d,const kr3d_frame_desc*s,kr3d_error*e)
 
 bool kr3d_gl_draw(kr3d_gl_device*d,const kr3d_draw_desc*s,kr3d_error*e)
 {
+    if(d&&d->lost)return fail(e,KR3D_ERROR_DEVICE_LOST,"GL context is lost");
+    if(d&&d->fault==KR3D_GL_FAULT_DRAW_CONTEXT_LOST){d->lost=true;return fail(e,KR3D_ERROR_DEVICE_LOST,"injected GL context loss at draw");}
     if(!d||!s||s->struct_size<sizeof*s||!d->frame||!s->mesh||s->mesh>d->max_meshes||!d->meshes[s->mesh].vao||!s->material||s->material>d->max_materials||!d->materials[s->material].live||!finite_matrix(s->model))return fail(e,KR3D_ERROR_STATE,"invalid GL draw");
     gl_mesh*m=&d->meshes[s->mesh];gl_material*mat=&d->materials[s->material];float*scratch=d->depth;kr3d_mat4 view,projection;GLfloat normal[9];bool lit=!(mat->flags&(KR3D_MATERIAL_UNLIT|KR3D_MATERIAL_EMISSIVE));if(lit&&!normal_matrix(s->model,normal))return fail(e,KR3D_ERROR_ARGUMENT,"singular GL model normal matrix");if(!lit){normal[0]=normal[4]=normal[8]=1;normal[1]=normal[2]=normal[3]=normal[5]=normal[6]=normal[7]=0;}memcpy(view.m,scratch,16u*sizeof(float));memcpy(projection.m,scratch+16,16u*sizeof(float));kr3d_mat4 mvp=kr3d_mat4_mul(projection,kr3d_mat4_mul(view,s->model));GLfloat rgba[4];unpack_rgba(mat->rgba,rgba);
     glUniformMatrix4fv(d->u_mvp,1,GL_FALSE,mvp.m);glUniformMatrix3fv(d->u_normal,1,GL_FALSE,normal);glUniform4fv(d->u_material,1,rgba);glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,lit?0:1);glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);
@@ -304,6 +320,8 @@ static void flip_rows(void*data,uint32_t w,uint32_t h,size_t element)
 
 bool kr3d_gl_frame_end(kr3d_gl_device*d,kr3d_frame_result*r,kr3d_error*e)
 {
+    if(d&&d->lost)return fail(e,KR3D_ERROR_DEVICE_LOST,"GL context is lost");
+    if(d&&d->fault==KR3D_GL_FAULT_FRAME_END_CONTEXT_LOST){d->lost=true;d->frame=false;return fail(e,KR3D_ERROR_DEVICE_LOST,"injected GL context loss at frame end");}
     if(!d||!d->frame||!r||r->struct_size<sizeof*r)return fail(e,KR3D_ERROR_STATE,"no active GL frame or invalid result");
     size_t n=(size_t)d->width*d->height;
     if(d->read_color){uint32_t*p=realloc(d->color,n*sizeof*p);if(!p)return fail(e,KR3D_ERROR_MEMORY,"GL color readback allocation failed");d->color=p;glPixelStorei(GL_PACK_ALIGNMENT,1);glReadPixels(0,0,(GLsizei)d->width,(GLsizei)d->height,GL_RGBA,GL_UNSIGNED_BYTE,d->color);flip_rows(d->color,d->width,d->height,sizeof *d->color);}

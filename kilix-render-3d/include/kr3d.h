@@ -51,7 +51,8 @@ bool kr3d_frustum_contains_sphere(const kr3d_frustum *f, kr3d_vec3 c, float r);
 bool kr3d_frustum_intersects_aabb(const kr3d_frustum *f, kr3d_aabb box);
 
 typedef enum { KR3D_OK = 0, KR3D_ERROR_ARGUMENT, KR3D_ERROR_LIMIT,
-    KR3D_ERROR_MEMORY, KR3D_ERROR_STATE, KR3D_ERROR_UNSUPPORTED } kr3d_error_code;
+    KR3D_ERROR_MEMORY, KR3D_ERROR_STATE, KR3D_ERROR_UNSUPPORTED,
+    KR3D_ERROR_DEVICE_LOST } kr3d_error_code;
 typedef struct { kr3d_error_code code; char message[96]; } kr3d_error;
 typedef enum { KR3D_FILTER_NEAREST = 0, KR3D_FILTER_BILINEAR } kr3d_filter;
 typedef enum { KR3D_ADDRESS_CLAMP = 0, KR3D_ADDRESS_REPEAT } kr3d_address;

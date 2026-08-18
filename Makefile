@@ -9,6 +9,7 @@ all: check-submodules
 	$(MAKE) -C kilix-assets all
 	$(MAKE) -C kilix-story all
 	$(MAKE) -C kilix-world all
+	$(MAKE) -C kilix-render-3d all
 	$(MAKE) -C kilix-tactics-engine \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" all
 	$(MAKE) -C kilix-top-down-engine \
@@ -28,6 +29,8 @@ test: check-submodules
 	$(MAKE) -f tests/test_fragment_default_goal.mk \
 		FRAGMENT=kilix-world/mk/kilix-world.mk consumer-default
 	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-render-3d/mk/kilix-render-3d.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
 		FRAGMENT=kilix-tactics-engine/mk/kilix-tactics.mk consumer-default
 	$(MAKE) -f tests/test_fragment_default_goal.mk \
 		FRAGMENT=kilix-top-down-engine/mk/kilix-top-down.mk consumer-default
@@ -37,6 +40,7 @@ test: check-submodules
 	$(MAKE) -C kilix-assets test
 	$(MAKE) -C kilix-story test
 	$(MAKE) -C kilix-world test
+	$(MAKE) -C kilix-render-3d test
 	$(MAKE) -C kilix-tactics-engine \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" all test test-headers
 	$(MAKE) -C kilix-top-down-engine \
@@ -53,6 +57,7 @@ sanitize: check-submodules
 	$(MAKE) -C kilix-assets sanitize
 	$(MAKE) -C kilix-story sanitize
 	$(MAKE) -C kilix-world sanitize
+	$(MAKE) -C kilix-render-3d sanitize
 	$(MAKE) -C kilix-tactics-engine \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" sanitize
 	$(MAKE) -C kilix-top-down-engine \
@@ -69,6 +74,7 @@ clean:
 	$(MAKE) -C kilix-assets clean
 	$(MAKE) -C kilix-story clean
 	$(MAKE) -C kilix-world clean
+	$(MAKE) -C kilix-render-3d clean
 	$(MAKE) -C kilix-tactics-engine clean
 	$(MAKE) -C kilix-top-down-engine clean
 	$(MAKE) -C kilix-ui clean

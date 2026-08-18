@@ -10,6 +10,7 @@ cross-library changes atomic.
 | `kilix-assets` | Bounded PNG/raw-RGBA loading, manifests, atlases, caching, and animation |
 | `kilix-story` | Conditions, transactional actions, and dialogue traversal |
 | `kilix-world` | Projection-independent grids, paths, sight, regions, interactions, and portals |
+| `kilix-render-3d` | Checked 3D math, indexed resources, and deterministic scalar rendering |
 | `kilix-top-down-engine` | Orthographic cameras, framebuffers, and pixel-art drawing |
 | `kilix-tactics-engine` | Isometric projection, picking, paths, sight, cover, and draw ordering |
 | `kilix-ui` | Game-rule-free menus, panels, dialogue, meters, and RPG composites |

@@ -12,7 +12,7 @@ test: compile
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v
 	PYTHONPATH=src $(PYTHON) -m kilix_game_tools --help >/dev/null
 	PYTHONPATH=src $(PYTHON) -m kilix_game_tools --version | \
-		grep -Fx 'kilix-game-tools 0.2.0'
+		grep -Fx 'kilix-game-tools 0.3.0'
 
 coverage:
 	$(PYTHON) -m coverage erase
@@ -33,9 +33,9 @@ test-install:
 	$(PYTHON) -m pip install --no-deps --no-index --target "$$staging/site" \
 		"$$wheel"; \
 	PYTHONPATH="$$staging/site" $(PYTHON) -c \
-		'import kilix_game_tools; assert kilix_game_tools.__version__ == "0.2.0"'; \
+		'import kilix_game_tools; assert kilix_game_tools.__version__ == "0.3.0"'; \
 	PYTHONPATH="$$staging/site" $(PYTHON) -m kilix_game_tools --version | \
-		grep -Fx 'kilix-game-tools 0.2.0'; \
+		grep -Fx 'kilix-game-tools 0.3.0'; \
 	PYTHONPATH="$$staging/site" "$$staging/site/bin/kilix-game-tools" \
 		--help >/dev/null
 

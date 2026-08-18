@@ -14,7 +14,7 @@ typedef struct {
     kr3d_texture_handle texture;
     uint32_t rgba, flags;
     kr3d_alpha_mode alpha;
-    float cutoff;
+    float cutoff, roughness, specular;
     bool live;
 } gl_material;
 
@@ -26,7 +26,7 @@ struct kr3d_gl_device {
     GLuint program;
     GLint u_mvp, u_normal, u_light, u_ambient, u_directional;
     GLint u_material, u_texture, u_use_texture, u_unlit, u_alpha_mode;
-    GLint u_alpha_cutoff;
+    GLint u_alpha_cutoff, u_roughness, u_specular;
     bool frame, read_color, read_depth;
     uint32_t width, height, submitted, rasterized;
     uint32_t *color;
@@ -109,12 +109,15 @@ static GLuint make_program(kr3d_gl_fault fault, kr3d_error *e)
         "uniform vec3 u_light; uniform float u_ambient,u_directional;\n"
         "uniform vec4 u_material; uniform sampler2D u_texture;\n"
         "uniform int u_use_texture,u_unlit,u_alpha_mode;"
-        "uniform float u_alpha_cutoff; out vec4 color;\n"
+        "uniform float u_alpha_cutoff,u_roughness,u_specular; out vec4 color;\n"
         "void main(){ vec4 texel=u_use_texture!=0?texture(u_texture,v_uv):vec4(1);"
         "vec4 c=texel*v_color*u_material;"
         "if(u_alpha_mode==1 && c.a<u_alpha_cutoff) discard;"
-        "float l=u_unlit!=0?1.0:u_ambient+u_directional*max(0.0,dot(normalize(v_normal),-normalize(u_light)));"
-        "color=vec4(c.rgb*l,c.a); }\n";
+        "vec3 n=normalize(v_normal); vec3 ld=-normalize(u_light);"
+        "float l=u_unlit!=0?1.0:u_ambient+u_directional*max(0.0,dot(n,ld));"
+        "float exponent=mix(64.0,2.0,u_roughness);"
+        "float highlight=u_unlit!=0?0.0:u_specular*pow(max(0.0,dot(n,normalize(ld+vec3(0,0,1)))),exponent);"
+        "color=vec4(c.rgb*l+vec3(highlight),c.a); }\n";
     static const char invalid_compile_source[] = "#version 330 core\nthis is not GLSL\n";
     static const char invalid_link_source[] =
         "#version 330 core\nin vec2 v_normal; out vec4 color;"
@@ -191,6 +194,8 @@ bool kr3d_gl_device_create(const kr3d_device_desc *desc,
     d->u_unlit=glGetUniformLocation(d->program,"u_unlit");
     d->u_alpha_mode=glGetUniformLocation(d->program,"u_alpha_mode");
     d->u_alpha_cutoff=glGetUniformLocation(d->program,"u_alpha_cutoff");
+    d->u_roughness=glGetUniformLocation(d->program,"u_roughness");
+    d->u_specular=glGetUniformLocation(d->program,"u_specular");
     (void)snprintf(d->renderer,sizeof d->renderer,"%.95s",(const char *)renderer);
     *out=d; if(e)e->code=KR3D_OK; return gl_ok(e,"GL device initialization failed");
 }
@@ -283,10 +288,12 @@ void kr3d_gl_texture_destroy(kr3d_gl_device*d,kr3d_texture_handle h)
 bool kr3d_gl_material_create(kr3d_gl_device*d,const kr3d_material_desc*s,
                              kr3d_material_handle*out,kr3d_error*e)
 {
+    float roughness=1.0f,specular=0.0f;
     if(out)*out=0;
-    if(!d||!s||!out||s->struct_size<sizeof*s||s->alpha_mode>KR3D_ALPHA_BLEND||!isfinite(s->alpha_cutoff)||s->alpha_cutoff<0||s->alpha_cutoff>1||(s->texture&&(s->texture>d->max_textures||!d->textures[s->texture].name)))return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL material");
+    if(!d||!s||!out||s->struct_size<offsetof(kr3d_material_desc,roughness)||s->alpha_mode>KR3D_ALPHA_BLEND||!isfinite(s->alpha_cutoff)||s->alpha_cutoff<0||s->alpha_cutoff>1||(s->texture&&(s->texture>d->max_textures||!d->textures[s->texture].name)))return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL material");
+    if(s->struct_size>=sizeof*s){roughness=s->roughness;specular=s->specular;if(!isfinite(roughness)||!isfinite(specular)||roughness<0||roughness>1||specular<0||specular>1)return fail(e,KR3D_ERROR_ARGUMENT,"invalid GL material response");}
     uint32_t h=1;while(h<=d->max_materials&&d->materials[h].live)++h;if(h>d->max_materials)return fail(e,KR3D_ERROR_LIMIT,"GL material limit reached");
-    d->materials[h]=(gl_material){s->texture,s->rgba?s->rgba:UINT32_C(0xffffffff),s->flags,s->alpha_mode,s->alpha_cutoff,true};*out=h;return true;
+    d->materials[h]=(gl_material){s->texture,s->rgba?s->rgba:UINT32_C(0xffffffff),s->flags,s->alpha_mode,s->alpha_cutoff,roughness,specular,true};*out=h;return true;
 }
 void kr3d_gl_material_destroy(kr3d_gl_device*d,kr3d_material_handle h){if(d&&h&&h<=d->max_materials)memset(&d->materials[h],0,sizeof d->materials[h]);}
 
@@ -309,7 +316,7 @@ bool kr3d_gl_draw(kr3d_gl_device*d,const kr3d_draw_desc*s,kr3d_error*e)
     if(d&&d->fault==KR3D_GL_FAULT_DRAW_CONTEXT_LOST){d->lost=true;return fail(e,KR3D_ERROR_DEVICE_LOST,"injected GL context loss at draw");}
     if(!d||!s||s->struct_size<sizeof*s||!d->frame||!s->mesh||s->mesh>d->max_meshes||!d->meshes[s->mesh].vao||!s->material||s->material>d->max_materials||!d->materials[s->material].live||!finite_matrix(s->model))return fail(e,KR3D_ERROR_STATE,"invalid GL draw");
     gl_mesh*m=&d->meshes[s->mesh];gl_material*mat=&d->materials[s->material];float*scratch=d->depth;kr3d_mat4 view,projection;GLfloat normal[9];bool lit=!(mat->flags&(KR3D_MATERIAL_UNLIT|KR3D_MATERIAL_EMISSIVE));if(lit&&!normal_matrix(s->model,normal))return fail(e,KR3D_ERROR_ARGUMENT,"singular GL model normal matrix");if(!lit){normal[0]=normal[4]=normal[8]=1;normal[1]=normal[2]=normal[3]=normal[5]=normal[6]=normal[7]=0;}memcpy(view.m,scratch,16u*sizeof(float));memcpy(projection.m,scratch+16,16u*sizeof(float));kr3d_mat4 mvp=kr3d_mat4_mul(projection,kr3d_mat4_mul(view,s->model));GLfloat rgba[4];unpack_rgba(mat->rgba,rgba);
-    glUniformMatrix4fv(d->u_mvp,1,GL_FALSE,mvp.m);glUniformMatrix3fv(d->u_normal,1,GL_FALSE,normal);glUniform4fv(d->u_material,1,rgba);glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,lit?0:1);glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);
+    glUniformMatrix4fv(d->u_mvp,1,GL_FALSE,mvp.m);glUniformMatrix3fv(d->u_normal,1,GL_FALSE,normal);glUniform4fv(d->u_material,1,rgba);glUniform1i(d->u_use_texture,mat->texture?1:0);glUniform1i(d->u_unlit,lit?0:1);glUniform1i(d->u_alpha_mode,(GLint)mat->alpha);glUniform1f(d->u_alpha_cutoff,mat->cutoff);glUniform1f(d->u_roughness,mat->roughness);glUniform1f(d->u_specular,mat->specular);
     if(mat->flags&KR3D_MATERIAL_TWO_SIDED)glDisable(GL_CULL_FACE);else glEnable(GL_CULL_FACE);
     if(mat->alpha==KR3D_ALPHA_BLEND){glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);}else{glDisable(GL_BLEND);glDepthMask(GL_TRUE);}
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,mat->texture?d->textures[mat->texture].name:0);glBindVertexArray(m->vao);glDrawElements(GL_TRIANGLES,m->count,GL_UNSIGNED_INT,NULL);glBindVertexArray(0);d->submitted+=(uint32_t)m->count/3u;d->rasterized+=(uint32_t)m->count/3u;return gl_ok(e,"GL draw failed");

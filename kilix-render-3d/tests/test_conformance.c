@@ -119,7 +119,7 @@ int main(void)
     assert(texture_create(device,&td,&tex,&error));
     kr3d_material_handle textured=0,red=0,green=0,blue=0;
     kr3d_material_desc mat={sizeof mat,tex,UINT32_MAX,KR3D_MATERIAL_UNLIT,
-        KR3D_ALPHA_OPAQUE,.5f}; assert(material_create(device,&mat,&textured,&error));
+        KR3D_ALPHA_OPAQUE,.5f,1,0}; assert(material_create(device,&mat,&textured,&error));
 #define MAKE_MATERIAL(out,color) do { mat.texture=0;mat.rgba=(color); \
     assert(material_create(device,&mat,&(out),&error)); } while(0)
     MAKE_MATERIAL(red,CONF_RED); MAKE_MATERIAL(green,CONF_GREEN); MAKE_MATERIAL(blue,CONF_BLUE);

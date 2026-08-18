@@ -91,7 +91,9 @@ typedef struct { size_t struct_size; uint32_t x, y, width, height;
 enum { KR3D_MATERIAL_UNLIT = 1u, KR3D_MATERIAL_TWO_SIDED = 2u,
        KR3D_MATERIAL_EMISSIVE = 4u };
 typedef struct { size_t struct_size; kr3d_texture_handle texture; uint32_t rgba;
-    uint32_t flags; kr3d_alpha_mode alpha_mode; float alpha_cutoff; } kr3d_material_desc;
+    uint32_t flags; kr3d_alpha_mode alpha_mode; float alpha_cutoff;
+    /* Appended ABI fields. Older descriptors default to rough, non-specular. */
+    float roughness, specular; } kr3d_material_desc;
 typedef struct { size_t struct_size; uint32_t max_meshes, max_textures, max_materials;
     uint32_t max_width, max_height; } kr3d_device_desc;
 typedef struct { size_t struct_size; uint32_t width, height; uint32_t *color;

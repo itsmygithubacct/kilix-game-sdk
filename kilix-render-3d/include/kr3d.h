@@ -65,6 +65,22 @@ typedef struct {
 } kr3d_vertex;
 typedef struct { size_t struct_size; const kr3d_vertex *vertices; size_t vertex_count;
     const uint32_t *indices; size_t index_count; } kr3d_mesh_desc;
+
+/* Bounded, checksummed K3DMESH1 transport. The decoded arrays are owned by
+   kr3d_mesh_data and remain suitable for kr3d_mesh_create until released. */
+#define KR3D_MESH_FILE_MAGIC "K3DMESH1"
+#define KR3D_MESH_FILE_HEADER_SIZE 104u
+typedef struct { size_t struct_size; size_t max_file_bytes; uint32_t max_vertices;
+    uint32_t max_indices, max_material_slots; } kr3d_mesh_file_limits;
+typedef struct { kr3d_vertex *vertices; uint32_t vertex_count; uint32_t *indices;
+    uint32_t index_count, material_slot_count; kr3d_aabb bounds; } kr3d_mesh_data;
+bool kr3d_mesh_file_decode(const void *bytes, size_t size,
+                           const kr3d_mesh_file_limits *limits,
+                           kr3d_mesh_data *out, kr3d_error *error);
+bool kr3d_mesh_file_encode(const kr3d_mesh_desc *mesh, uint32_t material_slot_count,
+                           void **out_bytes, size_t *out_size, kr3d_error *error);
+void kr3d_mesh_file_bytes_free(void *bytes);
+void kr3d_mesh_data_release(kr3d_mesh_data *data);
 typedef struct { size_t struct_size; uint32_t width, height; const uint32_t *rgba;
     kr3d_filter filter; kr3d_address address_u, address_v; } kr3d_texture_desc;
 enum { KR3D_MATERIAL_UNLIT = 1u, KR3D_MATERIAL_TWO_SIDED = 2u,

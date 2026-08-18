@@ -22,6 +22,21 @@ Include `include/kr3d.h`, initialize every extensible descriptor's
 calls, and `frame_end`. A frame may use caller-owned color/depth buffers or let
 the device retain reusable targets. All calls are render-thread confined.
 
+## Cooked mesh transport
+
+`kr3d_mesh_file_encode` and `kr3d_mesh_file_decode` implement the portable
+`K3DMESH1` format used between offline content cookers and games. Its canonical
+little-endian payload contains the fixed position/normal/UV/color vertex layout
+and 32-bit triangle indices. The header records exact bounds, byte counts,
+material-slot count, and a SHA-256 payload digest.
+
+Decoding is transactional and requires caller-selected limits for file bytes,
+vertices, indices, and material slots. It rejects unknown flags or layout,
+truncation and trailing data, non-finite or pathological vertices, dishonest
+bounds, out-of-range indices, and digest mismatches. Decoded arrays are released
+with `kr3d_mesh_data_release`; encoded bytes with
+`kr3d_mesh_file_bytes_free`.
+
 ## Optional OpenGL backend
 
 `kr3d_gl.h` implements the same resource and frame descriptors on OpenGL 3.3.

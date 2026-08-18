@@ -19,12 +19,14 @@ OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 LIB := $(BUILD_DIR)/lib$(PROJECT).a
 TEST := $(BUILD_DIR)/test-render-3d
 MESH_TEST := $(BUILD_DIR)/test-mesh-file
+CONFORMANCE_TEST := $(BUILD_DIR)/test-conformance
 PC := $(BUILD_DIR)/$(PROJECT).pc
 GL_PC := $(BUILD_DIR)/$(PROJECT)-gl.pc
 GL_SOURCES := src/renderer_gl.c
 GL_OBJECTS := $(GL_SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 GL_LIB := $(BUILD_DIR)/lib$(PROJECT)-gl.a
 GL_TEST := $(BUILD_DIR)/test-render-3d-gl
+GL_CONFORMANCE_TEST := $(BUILD_DIR)/test-conformance-gl
 GL_CPPFLAGS := $(shell $(GL_PKG_CONFIG) --cflags $(GL_PACKAGES) 2>/dev/null)
 GL_LDLIBS := $(shell $(GL_PKG_CONFIG) --libs $(GL_PACKAGES) 2>/dev/null)
 ifeq ($(ENABLE_OPENGL),1)
@@ -50,9 +52,12 @@ $(TEST): tests/test_render3d.c $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 $(MESH_TEST): tests/test_mesh_file.c $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-test: $(TEST) $(MESH_TEST)
+$(CONFORMANCE_TEST): tests/test_conformance.c tests/conformance_scene.h $(LIB)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
+test: $(TEST) $(MESH_TEST) $(CONFORMANCE_TEST)
 	$(TEST)
 	$(MESH_TEST)
+	$(CONFORMANCE_TEST)
 check-opengl:
 	@$(GL_PKG_CONFIG) --exists $(GL_PACKAGES) || { \
 		echo "OpenGL backend unavailable: missing pkg-config packages: $(GL_PACKAGES)" >&2; exit 1; }
@@ -60,8 +65,12 @@ opengl: check-opengl $(GL_LIB)
 $(GL_TEST): tests/test_render3d_gl.c $(LIB) $(GL_LIB)
 	$(CC) $(CPPFLAGS) $(GL_CPPFLAGS) $(CFLAGS) $< $(GL_LIB) $(LIB) \
 		$(GL_LDLIBS) $(LDLIBS) -o $@
-test-opengl: check-opengl $(GL_TEST)
+$(GL_CONFORMANCE_TEST): tests/test_conformance.c tests/conformance_scene.h $(LIB) $(GL_LIB)
+	$(CC) $(CPPFLAGS) $(GL_CPPFLAGS) $(CFLAGS) -DKR3D_CONFORMANCE_GL $< \
+		$(GL_LIB) $(LIB) $(GL_LDLIBS) $(LDLIBS) -o $@
+test-opengl: check-opengl $(GL_TEST) $(GL_CONFORMANCE_TEST)
 	LIBGL_ALWAYS_SOFTWARE=1 $(GL_TEST)
+	LIBGL_ALWAYS_SOFTWARE=1 $(GL_CONFORMANCE_TEST)
 sanitize:
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) -fno-omit-frame-pointer \
@@ -72,6 +81,10 @@ sanitize:
 		-fsanitize=address,undefined $(SOURCES) tests/test_mesh_file.c \
 		-fsanitize=address,undefined $(LDLIBS) -o $(BUILD_DIR)/test-mesh-file-sanitize
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(BUILD_DIR)/test-mesh-file-sanitize
+	$(CC) $(CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) -fno-omit-frame-pointer \
+		-fsanitize=address,undefined $(SOURCES) tests/test_conformance.c \
+		-fsanitize=address,undefined $(LDLIBS) -o $(BUILD_DIR)/test-conformance-sanitize
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(BUILD_DIR)/test-conformance-sanitize
 sanitize-opengl: check-opengl
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(GL_CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) \
@@ -80,6 +93,12 @@ sanitize-opengl: check-opengl
 		$(GL_LDLIBS) $(LDLIBS) -o $(BUILD_DIR)/test-render-3d-gl-sanitize
 	LIBGL_ALWAYS_SOFTWARE=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 		UBSAN_OPTIONS=halt_on_error=1 $(BUILD_DIR)/test-render-3d-gl-sanitize
+	$(CC) $(CPPFLAGS) $(GL_CPPFLAGS) -std=c11 -O1 -g3 $(WARNINGS) \
+		-fno-omit-frame-pointer -fsanitize=address,undefined -DKR3D_CONFORMANCE_GL \
+		$(SOURCES) $(GL_SOURCES) tests/test_conformance.c -fsanitize=address,undefined \
+		$(GL_LDLIBS) $(LDLIBS) -o $(BUILD_DIR)/test-conformance-gl-sanitize
+	LIBGL_ALWAYS_SOFTWARE=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+		UBSAN_OPTIONS=halt_on_error=1 $(BUILD_DIR)/test-conformance-gl-sanitize
 $(PC): kilix-render-3d.pc.in Makefile | $(BUILD_DIR)
 	sed 's|@PREFIX@|$(PREFIX)|g' $< > $@
 $(GL_PC): kilix-render-3d-gl.pc.in Makefile | $(BUILD_DIR)

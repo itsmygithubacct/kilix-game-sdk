@@ -2,7 +2,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1303,6 +1305,8 @@ static bool json_is_digit(unsigned char byte)
     return byte >= (unsigned char)'0' && byte <= (unsigned char)'9';
 }
 
+static bool json_skip_number(json_reader *reader);
+
 static bool json_uint(json_reader *reader, uint32_t *output)
 {
     uint64_t value = 0u;
@@ -1323,6 +1327,24 @@ static bool json_uint(json_reader *reader, uint32_t *output)
     }
     if (!found) return false;
     *output = (uint32_t)value;
+    return true;
+}
+
+static bool json_float(json_reader *reader, float *output)
+{
+    json_reader scan = *reader;
+    char *end = NULL;
+    double value;
+    json_space(&scan);
+    reader->cursor = scan.cursor;
+    if (!json_skip_number(&scan)) return false;
+    errno = 0;
+    value = strtod(reader->bytes + reader->cursor, &end);
+    if (errno == ERANGE || !end ||
+        (size_t)(end - reader->bytes) != scan.cursor || !isfinite(value) ||
+        value < -(double)FLT_MAX || value > (double)FLT_MAX) return false;
+    reader->cursor = scan.cursor;
+    *output = (float)value;
     return true;
 }
 
@@ -1437,6 +1459,13 @@ static void free_bitmap(kilix_asset_manifest_bitmap *bitmap)
     *bitmap = (kilix_asset_manifest_bitmap){0};
 }
 
+static void free_mesh(kilix_asset_manifest_mesh *mesh)
+{ free(mesh->id); free(mesh->path); *mesh = (kilix_asset_manifest_mesh){0}; }
+static void free_texture(kilix_asset_manifest_texture *texture)
+{ free(texture->id); free(texture->path); *texture = (kilix_asset_manifest_texture){0}; }
+static void free_material(kilix_asset_manifest_material *material)
+{ free(material->id); free(material->base_texture); *material = (kilix_asset_manifest_material){0}; }
+
 void kilix_asset_manifest_clear(kilix_asset_manifest *manifest)
 {
     size_t index;
@@ -1446,8 +1475,12 @@ void kilix_asset_manifest_clear(kilix_asset_manifest *manifest)
         free_atlas(&manifest->atlases[index]);
     for (index = 0u; index < manifest->bitmap_count; ++index)
         free_bitmap(&manifest->bitmaps[index]);
+    for (index = 0u; index < manifest->mesh_count; ++index) free_mesh(&manifest->meshes[index]);
+    for (index = 0u; index < manifest->texture_count; ++index) free_texture(&manifest->textures[index]);
+    for (index = 0u; index < manifest->material_count; ++index) free_material(&manifest->materials[index]);
     free(manifest->atlases);
     free(manifest->bitmaps);
+    free(manifest->meshes); free(manifest->textures); free(manifest->materials);
     *manifest = (kilix_asset_manifest){0};
 }
 
@@ -1591,6 +1624,17 @@ static bool parse_bitmap(json_reader *reader,
            ((png_path && !grid) || (grid_path && grid));
 }
 
+static bool sha256_text_is_valid(const char *text) {
+    size_t i;if(!text||strlen(text)!=64u)return false;
+    for(i=0;i<64u;++i)if(!((text[i]>='0'&&text[i]<='9')||(text[i]>='a'&&text[i]<='f')))return false;
+    return true;
+}
+static bool parse_mesh(json_reader*r,kilix_asset_manifest_mesh*m){bool id=false,path=false,hash=false;if(!json_take(r,'{')||json_take(r,'}'))return false;for(;;){char*k=NULL;bool ok;if(!json_string(r,&k)||!json_take(r,':')){free(k);return false;}if(!strcmp(k,"id")){ok=!id&&json_string(r,&m->id);id=ok;}else if(!strcmp(k,"path")){ok=!path&&json_string(r,&m->path);path=ok;}else if(!strcmp(k,"payload_sha256")){char*s=NULL;ok=!hash&&json_string(r,&s)&&sha256_text_is_valid(s);if(ok){memcpy(m->payload_sha256,s,65u);hash=true;}free(s);}else ok=json_skip_value(r);free(k);if(!ok)return false;if(json_take(r,'}'))break;if(!json_take(r,','))return false;}return id&&manifest_text_is_safe(m->id)&&path&&kilix_asset_path_is_safe(m->path)&&hash;}
+static bool enum_text(json_reader*r,const char*const*names,size_t n,unsigned*out){char*s=NULL;size_t i;if(!json_string(r,&s))return false;for(i=0;i<n;++i)if(!strcmp(s,names[i])){*out=(unsigned)i;free(s);return true;}free(s);return false;}
+static bool parse_texture(json_reader*r,kilix_asset_manifest_texture*t){static const char*const filters[]={"nearest","linear","linear_mipmap"};static const char*const addresses[]={"clamp","repeat","mirror"};bool id=false,path=false,filter=false,u=false,v=false;if(!json_take(r,'{')||json_take(r,'}'))return false;for(;;){char*k=NULL;bool ok;unsigned value;if(!json_string(r,&k)||!json_take(r,':')){free(k);return false;}if(!strcmp(k,"id")){ok=!id&&json_string(r,&t->id);id=ok;}else if(!strcmp(k,"path")){ok=!path&&json_string(r,&t->path);path=ok;}else if(!strcmp(k,"filter")){ok=!filter&&enum_text(r,filters,3u,&value);if(ok){t->filter=(kilix_asset_texture_filter)value;filter=true;}}else if(!strcmp(k,"address_u")){ok=!u&&enum_text(r,addresses,3u,&value);if(ok){t->address_u=(kilix_asset_texture_address)value;u=true;}}else if(!strcmp(k,"address_v")){ok=!v&&enum_text(r,addresses,3u,&value);if(ok){t->address_v=(kilix_asset_texture_address)value;v=true;}}else ok=json_skip_value(r);free(k);if(!ok)return false;if(json_take(r,'}'))break;if(!json_take(r,','))return false;}return id&&manifest_text_is_safe(t->id)&&path&&kilix_asset_path_is_safe(t->path)&&filter&&u&&v;}
+static bool parse_color(json_reader*r,float out[4]){size_t i;if(!json_take(r,'['))return false;for(i=0;i<4u;++i){if(!json_float(r,&out[i])||out[i]<0.f||out[i]>1.f)return false;if(i<3u&&!json_take(r,','))return false;}return json_take(r,']');}
+static bool parse_material(json_reader*r,kilix_asset_manifest_material*m){static const char*const alphas[]={"opaque","mask","blend"};bool id=false,tex=false,color=false,rough=false,spec=false,unlit=false,alpha=false,cutoff=false;if(!json_take(r,'{')||json_take(r,'}'))return false;for(;;){char*k=NULL;bool ok;unsigned value;if(!json_string(r,&k)||!json_take(r,':')){free(k);return false;}if(!strcmp(k,"id")){ok=!id&&json_string(r,&m->id);id=ok;}else if(!strcmp(k,"base_texture")){ok=!tex&&json_string(r,&m->base_texture);tex=ok;}else if(!strcmp(k,"base_color")){ok=!color&&parse_color(r,m->base_color);color=ok;}else if(!strcmp(k,"roughness")){ok=!rough&&json_float(r,&m->roughness)&&m->roughness>=0.f&&m->roughness<=1.f;rough=ok;}else if(!strcmp(k,"specular")){ok=!spec&&json_float(r,&m->specular)&&m->specular>=0.f&&m->specular<=1.f;spec=ok;}else if(!strcmp(k,"unlit")){ok=!unlit&&json_bool(r,&m->unlit);unlit=ok;}else if(!strcmp(k,"alpha_mode")){ok=!alpha&&enum_text(r,alphas,3u,&value);if(ok){m->alpha_mode=(kilix_asset_alpha_mode)value;alpha=true;}}else if(!strcmp(k,"alpha_cutoff")){ok=!cutoff&&json_float(r,&m->alpha_cutoff)&&m->alpha_cutoff>=0.f&&m->alpha_cutoff<=1.f;cutoff=ok;}else ok=json_skip_value(r);free(k);if(!ok)return false;if(json_take(r,'}'))break;if(!json_take(r,','))return false;}return id&&manifest_text_is_safe(m->id)&&(tex!=color)&&(!tex||manifest_text_is_safe(m->base_texture))&&rough&&spec&&unlit&&alpha&&cutoff;}
+
 static kilix_asset_status append_atlas(kilix_asset_manifest *manifest,
                                        size_t *capacity,
                                        kilix_asset_manifest_atlas *atlas)
@@ -1628,6 +1672,20 @@ static kilix_asset_status append_bitmap(kilix_asset_manifest *manifest,
     *bitmap = (kilix_asset_manifest_bitmap){0};
     return KILIX_ASSET_OK;
 }
+
+#define DEFINE_APPEND(name, type, field, count) \
+static kilix_asset_status append_##name(kilix_asset_manifest*m,size_t*c,type*v){type*items;if(m->count==*c){size_t n=*c==0u?8u:*c*2u;if(n<*c||n>SIZE_MAX/sizeof*items)return KILIX_ASSET_LIMIT_EXCEEDED;items=realloc(m->field,n*sizeof*items);if(!items)return KILIX_ASSET_OUT_OF_MEMORY;m->field=items;*c=n;}items=m->field;items[m->count++]=*v;*v=(type){0};return KILIX_ASSET_OK;}
+DEFINE_APPEND(mesh,kilix_asset_manifest_mesh,meshes,mesh_count)
+DEFINE_APPEND(texture,kilix_asset_manifest_texture,textures,texture_count)
+DEFINE_APPEND(material,kilix_asset_manifest_material,materials,material_count)
+#undef DEFINE_APPEND
+
+#define DEFINE_ARRAY(name, type, parse, release) \
+static bool parse_##name##_array(json_reader*r,kilix_asset_manifest*m,size_t*c){if(!json_take(r,'['))return false;if(json_take(r,']'))return true;for(;;){type v={0};kilix_asset_status s;if(!parse(r,&v)){release(&v);return false;}s=append_##name(m,c,&v);if(s!=KILIX_ASSET_OK){r->failure=s;release(&v);return false;}if(json_take(r,']'))return true;if(!json_take(r,','))return false;}}
+DEFINE_ARRAY(mesh,kilix_asset_manifest_mesh,parse_mesh,free_mesh)
+DEFINE_ARRAY(texture,kilix_asset_manifest_texture,parse_texture,free_texture)
+DEFINE_ARRAY(material,kilix_asset_manifest_material,parse_material,free_material)
+#undef DEFINE_ARRAY
 
 static bool parse_atlas_array(json_reader *reader,
                               kilix_asset_manifest *manifest,
@@ -1687,31 +1745,29 @@ static int compare_text_pointers(const void *left, const void *right)
 static kilix_asset_status manifest_ids_are_unique(
     const kilix_asset_manifest *manifest)
 {
-    size_t maximum = manifest->atlas_count > manifest->bitmap_count ?
-        manifest->atlas_count : manifest->bitmap_count;
+    size_t maximum = manifest->atlas_count + manifest->bitmap_count +
+        manifest->mesh_count + manifest->texture_count + manifest->material_count;
     const char **ids;
-    size_t count;
+    size_t count = 0u;
     size_t index;
-    if (maximum < 2u) return KILIX_ASSET_OK;
+    if (maximum < 2u) {
+        for(index=0u;index<manifest->material_count;++index)
+            if(manifest->materials[index].base_texture&&!kilix_asset_manifest_find_texture(manifest,manifest->materials[index].base_texture))return KILIX_ASSET_CORRUPT;
+        return KILIX_ASSET_OK;
+    }
     if (maximum > SIZE_MAX / sizeof *ids)
         return KILIX_ASSET_LIMIT_EXCEEDED;
     ids = malloc(maximum * sizeof *ids);
     if (!ids) return KILIX_ASSET_OUT_OF_MEMORY;
-    for (count = 0u; count < 2u; ++count) {
-        size_t item_count = count == 0u ? manifest->atlas_count :
-                                         manifest->bitmap_count;
-        for (index = 0u; index < item_count; ++index)
-            ids[index] = count == 0u ? manifest->atlases[index].id :
-                                      manifest->bitmaps[index].id;
-        qsort(ids, item_count, sizeof *ids, compare_text_pointers);
-        for (index = 1u; index < item_count; ++index) {
-            if (strcmp(ids[index - 1u], ids[index]) == 0) {
-                free(ids);
-                return KILIX_ASSET_CORRUPT;
-            }
-        }
-    }
+    for(index=0u;index<manifest->atlas_count;++index)ids[count++]=manifest->atlases[index].id;
+    for(index=0u;index<manifest->bitmap_count;++index)ids[count++]=manifest->bitmaps[index].id;
+    for(index=0u;index<manifest->mesh_count;++index)ids[count++]=manifest->meshes[index].id;
+    for(index=0u;index<manifest->texture_count;++index)ids[count++]=manifest->textures[index].id;
+    for(index=0u;index<manifest->material_count;++index)ids[count++]=manifest->materials[index].id;
+    qsort(ids,count,sizeof*ids,compare_text_pointers);
+    for(index=1u;index<count;++index)if(!strcmp(ids[index-1u],ids[index])){free(ids);return KILIX_ASSET_CORRUPT;}
     free(ids);
+    for(index=0u;index<manifest->material_count;++index)if(manifest->materials[index].base_texture&&!kilix_asset_manifest_find_texture(manifest,manifest->materials[index].base_texture))return KILIX_ASSET_CORRUPT;
     return KILIX_ASSET_OK;
 }
 
@@ -1723,8 +1779,10 @@ kilix_asset_status kilix_asset_manifest_load_json(
     size_t size = 0u;
     size_t atlas_capacity = 0u;
     size_t bitmap_capacity = 0u;
+    size_t mesh_capacity = 0u, texture_capacity = 0u, material_capacity = 0u;
     json_reader reader;
     bool schema = false, game = false, atlases = false, bitmaps = false;
+    bool meshes = false, textures = false, materials = false;
     kilix_asset_status status;
     if (!manifest || !path || max_file_bytes == 0u)
         return KILIX_ASSET_INVALID_ARGUMENT;
@@ -1754,6 +1812,12 @@ kilix_asset_status kilix_asset_manifest_load_json(
             result = !bitmaps && parse_bitmap_array(
                 &reader, &parsed, &bitmap_capacity);
             bitmaps = result;
+        } else if (strcmp(key, "meshes") == 0) {
+            result = !meshes && parse_mesh_array(&reader,&parsed,&mesh_capacity); meshes=result;
+        } else if (strcmp(key, "textures") == 0) {
+            result = !textures && parse_texture_array(&reader,&parsed,&texture_capacity); textures=result;
+        } else if (strcmp(key, "materials") == 0) {
+            result = !materials && parse_material_array(&reader,&parsed,&material_capacity); materials=result;
         } else result = json_skip_value(&reader);
         free(key);
         if (!result) goto corrupt;
@@ -1801,3 +1865,10 @@ const kilix_asset_manifest_bitmap *kilix_asset_manifest_find_bitmap(
             return &manifest->bitmaps[index];
     return NULL;
 }
+
+#define DEFINE_FIND(name,type,field,count) \
+const type *kilix_asset_manifest_find_##name(const kilix_asset_manifest*m,const char*id){size_t i;if(!m||!id)return NULL;for(i=0u;i<m->count;++i)if(!strcmp(m->field[i].id,id))return &m->field[i];return NULL;}
+DEFINE_FIND(mesh,kilix_asset_manifest_mesh,meshes,mesh_count)
+DEFINE_FIND(texture,kilix_asset_manifest_texture,textures,texture_count)
+DEFINE_FIND(material,kilix_asset_manifest_material,materials,material_count)
+#undef DEFINE_FIND

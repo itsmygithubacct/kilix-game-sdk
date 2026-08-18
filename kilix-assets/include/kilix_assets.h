@@ -161,6 +161,49 @@ typedef struct kilix_asset_manifest_bitmap {
     uint32_t height;
 } kilix_asset_manifest_bitmap;
 
+typedef enum kilix_asset_texture_filter {
+    KILIX_ASSET_FILTER_NEAREST = 0,
+    KILIX_ASSET_FILTER_LINEAR,
+    KILIX_ASSET_FILTER_LINEAR_MIPMAP
+} kilix_asset_texture_filter;
+
+typedef enum kilix_asset_texture_address {
+    KILIX_ASSET_ADDRESS_CLAMP = 0,
+    KILIX_ASSET_ADDRESS_REPEAT,
+    KILIX_ASSET_ADDRESS_MIRROR
+} kilix_asset_texture_address;
+
+typedef enum kilix_asset_alpha_mode {
+    KILIX_ASSET_ALPHA_OPAQUE = 0,
+    KILIX_ASSET_ALPHA_MASK,
+    KILIX_ASSET_ALPHA_BLEND
+} kilix_asset_alpha_mode;
+
+typedef struct kilix_asset_manifest_mesh {
+    char *id;
+    char *path;
+    char payload_sha256[65];
+} kilix_asset_manifest_mesh;
+
+typedef struct kilix_asset_manifest_texture {
+    char *id;
+    char *path;
+    kilix_asset_texture_filter filter;
+    kilix_asset_texture_address address_u;
+    kilix_asset_texture_address address_v;
+} kilix_asset_manifest_texture;
+
+typedef struct kilix_asset_manifest_material {
+    char *id;
+    char *base_texture;
+    float base_color[4];
+    float roughness;
+    float specular;
+    float alpha_cutoff;
+    kilix_asset_alpha_mode alpha_mode;
+    bool unlit;
+} kilix_asset_manifest_material;
+
 /* Parser for the versioned Kilix graphics manifest schema. Unknown metadata
  * fields are skipped, while runtime atlas/bitmap records are strict. Bitmap
  * records accept either `png` plus `width`/`height`, or `path` plus a valid
@@ -174,6 +217,12 @@ typedef struct kilix_asset_manifest {
     size_t atlas_count;
     kilix_asset_manifest_bitmap *bitmaps;
     size_t bitmap_count;
+    kilix_asset_manifest_mesh *meshes;
+    size_t mesh_count;
+    kilix_asset_manifest_texture *textures;
+    size_t texture_count;
+    kilix_asset_manifest_material *materials;
+    size_t material_count;
 } kilix_asset_manifest;
 
 void kilix_asset_manifest_clear(kilix_asset_manifest *manifest);
@@ -182,6 +231,12 @@ kilix_asset_status kilix_asset_manifest_load_json(
 const kilix_asset_manifest_atlas *kilix_asset_manifest_find_atlas(
     const kilix_asset_manifest *manifest, const char *id);
 const kilix_asset_manifest_bitmap *kilix_asset_manifest_find_bitmap(
+    const kilix_asset_manifest *manifest, const char *id);
+const kilix_asset_manifest_mesh *kilix_asset_manifest_find_mesh(
+    const kilix_asset_manifest *manifest, const char *id);
+const kilix_asset_manifest_texture *kilix_asset_manifest_find_texture(
+    const kilix_asset_manifest *manifest, const char *id);
+const kilix_asset_manifest_material *kilix_asset_manifest_find_material(
     const kilix_asset_manifest *manifest, const char *id);
 
 #ifdef __cplusplus

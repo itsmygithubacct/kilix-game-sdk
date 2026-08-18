@@ -74,6 +74,16 @@ the production-compatible `path` plus a complete 1×1 (or otherwise internally
 consistent) `grid` object. Mixing the two representations is rejected rather
 than resolved by field order.
 
+Version 1 also accepts optional `meshes`, `textures`, and `materials` arrays.
+Mesh records contain an ID, safe relative K3DMESH1 path, and lowercase
+64-character payload SHA-256. Texture records specify a safe path plus
+`nearest`, `linear`, or `linear_mipmap` filtering and independent `clamp`,
+`repeat`, or `mirror` U/V addressing. Materials select exactly one base-color
+texture or RGBA constant and require bounded roughness, specular, alpha cutoff,
+alpha mode, and an unlit flag. IDs are unique across every manifest array and
+material texture references must resolve. These records are metadata only;
+`kilix-assets` does not depend on a renderer or mesh loader.
+
 The checker loads every referenced image through the same cache and decoder,
 then verifies declared dimensions, atlas grids, and required transparency.
 

@@ -653,6 +653,41 @@ static bool manifest_status_is(const char *path, const char *json,
     return status == expected;
 }
 
+static bool test_manifest_render_assets(const char *path)
+{
+    static const char valid[] =
+      "{\"schema_version\":1,\"game\":\"render\",\"atlases\":[],\"bitmaps\":[],"
+      "\"meshes\":[{\"id\":\"table\",\"path\":\"mesh/table.k3d\","
+      "\"payload_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}],"
+      "\"textures\":[{\"id\":\"cloth-map\",\"path\":\"tex/cloth.png\","
+      "\"filter\":\"linear_mipmap\",\"address_u\":\"repeat\",\"address_v\":\"mirror\"}],"
+      "\"materials\":[{\"id\":\"cloth\",\"base_texture\":\"cloth-map\","
+      "\"roughness\":0.8,\"specular\":0.2,\"unlit\":false,"
+      "\"alpha_mode\":\"mask\",\"alpha_cutoff\":0.5},"
+      "{\"id\":\"marker\",\"base_color\":[1,0.5,0.25,1],"
+      "\"roughness\":1,\"specular\":0,\"unlit\":true,"
+      "\"alpha_mode\":\"opaque\",\"alpha_cutoff\":0}]}";
+    static const char duplicate[] =
+      "{\"schema_version\":1,\"game\":\"bad\",\"atlases\":[],\"bitmaps\":[],"
+      "\"meshes\":[{\"id\":\"same\",\"path\":\"a.k3d\",\"payload_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}],"
+      "\"textures\":[{\"id\":\"same\",\"path\":\"a.png\",\"filter\":\"linear\",\"address_u\":\"clamp\",\"address_v\":\"clamp\"}]}";
+    kilix_asset_manifest manifest={0};char *owned;
+    CHECK(write_bytes(path,valid,sizeof valid-1u));
+    CHECK(kilix_asset_manifest_load_json(&manifest,path,65536u)==KILIX_ASSET_OK);
+    CHECK(manifest.mesh_count==1u&&manifest.texture_count==1u&&manifest.material_count==2u);
+    CHECK(kilix_asset_manifest_find_mesh(&manifest,"table"));
+    CHECK(kilix_asset_manifest_find_texture(&manifest,"cloth-map")->filter==KILIX_ASSET_FILTER_LINEAR_MIPMAP);
+    CHECK(kilix_asset_manifest_find_material(&manifest,"cloth")->alpha_mode==KILIX_ASSET_ALPHA_MASK);
+    owned=manifest.game;
+    CHECK(write_bytes(path,duplicate,sizeof duplicate-1u));
+    CHECK(kilix_asset_manifest_load_json(&manifest,path,65536u)==KILIX_ASSET_CORRUPT);
+    CHECK(manifest.game==owned&&manifest.material_count==2u);
+    kilix_asset_manifest_clear(&manifest);
+    CHECK(manifest_status_is(path,
+      "{\"schema_version\":1,\"game\":\"bad\",\"atlases\":[],\"bitmaps\":[],\"materials\":[{\"id\":\"m\",\"base_texture\":\"missing\",\"roughness\":0,\"specular\":0,\"unlit\":false,\"alpha_mode\":\"opaque\",\"alpha_cutoff\":0}]}",KILIX_ASSET_CORRUPT));
+    return true;
+}
+
 static bool test_manifest_unicode_and_strictness(const char *path)
 {
     static const char valid[] =
@@ -796,6 +831,7 @@ int main(int argc, char **argv)
     RUN_TEST("cache limits", test_cache_limits(directory, raw_pixels));
     RUN_TEST("nonregular inputs", test_nonregular_inputs(directory));
     RUN_TEST("manifest v1", test_manifest(manifest_path));
+    RUN_TEST("render manifest extensions",test_manifest_render_assets(manifest_path));
     RUN_TEST("manifest Unicode and strictness",
              test_manifest_unicode_and_strictness(manifest_path));
     (void)unlink(manifest_path);

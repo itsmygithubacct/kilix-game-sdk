@@ -17,6 +17,7 @@ all: check-submodules
 	$(MAKE) -C kilix-ui \
 		KILIX_TOP_DOWN_DIR="$(TOP_DOWN)" \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" all
+	$(MAKE) -C kilix-valve-client all
 
 test: check-submodules
 	$(MAKE) -f tests/test_fragment_default_goal.mk \
@@ -33,6 +34,8 @@ test: check-submodules
 		FRAGMENT=kilix-top-down-engine/mk/kilix-top-down.mk consumer-default
 	$(MAKE) -f tests/test_fragment_default_goal.mk \
 		FRAGMENT=kilix-ui/mk/kilix-ui.mk consumer-default
+	$(MAKE) -f tests/test_fragment_default_goal.mk \
+		FRAGMENT=kilix-valve-client/mk/kilix-valve-client.mk consumer-default
 	$(MAKE) -C kilix-game-kit test
 	$(MAKE) -C kilix-assets test
 	$(MAKE) -C kilix-story test
@@ -47,6 +50,7 @@ test: check-submodules
 		KILIX_TOP_DOWN_DIR="$(TOP_DOWN)" \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" test
 	$(MAKE) -C kilix-game-tools test
+	$(MAKE) -C kilix-valve-client test
 
 sanitize: check-submodules
 	$(MAKE) -C kilix-game-kit sanitize
@@ -60,6 +64,7 @@ sanitize: check-submodules
 	$(MAKE) -C kilix-ui \
 		KILIX_TOP_DOWN_DIR="$(TOP_DOWN)" \
 		SOFT_RASTER_DIR="$(SOFT_RASTER)" sanitize
+	$(MAKE) -C kilix-valve-client sanitize
 
 check-submodules:
 	tools/check-submodules.sh
@@ -72,3 +77,4 @@ clean:
 	$(MAKE) -C kilix-tactics-engine clean
 	$(MAKE) -C kilix-top-down-engine clean
 	$(MAKE) -C kilix-ui clean
+	$(MAKE) -C kilix-valve-client clean

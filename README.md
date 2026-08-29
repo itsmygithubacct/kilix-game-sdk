@@ -14,6 +14,7 @@ cross-library changes atomic.
 | `kilix-tactics-engine` | Isometric projection, picking, paths, sight, cover, and draw ordering |
 | `kilix-ui` | Game-rule-free menus, panels, dialogue, meters, and RPG composites |
 | `kilix-game-tools` | Deterministic Python validation and release archives |
+| `kilix-valve-client` | Fixed-policy Steam detection, separate consent requirements, and fail-closed session orchestration |
 
 Game rules, content schemas, art, audio, campaign compilers, and release policy
 remain in each game.

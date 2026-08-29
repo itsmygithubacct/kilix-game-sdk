@@ -11,6 +11,7 @@ KILIX_STORY_ROOT ?= $(KILIX_GAME_SDK_ROOT)/kilix-story
 KILIX_TACTICS_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-tactics-engine
 KILIX_TOP_DOWN_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-top-down-engine
 KILIX_UI_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-ui
+KILIX_VALVE_CLIENT_DIR ?= $(KILIX_GAME_SDK_ROOT)/kilix-valve-client
 KILIX_WORLD_ROOT ?= $(KILIX_GAME_SDK_ROOT)/kilix-world
 
 endif

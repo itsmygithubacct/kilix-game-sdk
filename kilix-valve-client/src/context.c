@@ -52,7 +52,9 @@ kvalve_client_context_create(kvalve_client_context **out)
             || !kvalve_copy_path(context->policy, KVALVE_DEFAULT_POLICY)
             || !kvalve_copy_path(context->dpkg_arch, KVALVE_DEFAULT_DPKG_ARCH)
             || !kvalve_copy_path(context->dpkg_status,
-                                 KVALVE_DEFAULT_DPKG_STATUS)) {
+                                 KVALVE_DEFAULT_DPKG_STATUS)
+            || !kvalve_copy_path(context->proc_root,
+                                 KVALVE_DEFAULT_PROC_ROOT)) {
         free(context);
         return KVALVE_CLIENT_ERR_INVALID;
     }
@@ -163,5 +165,12 @@ kvalve_test_context_paths(kvalve_client_context *context,
     context->trusted_uid = geteuid();
     context->require_root_owner = false;
     return true;
+}
+
+bool
+kvalve_test_context_proc_root(kvalve_client_context *context,
+                              const char *proc_root)
+{
+    return context != NULL && kvalve_copy_path(context->proc_root, proc_root);
 }
 #endif

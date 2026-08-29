@@ -135,9 +135,25 @@ all_digits(const char *text)
 }
 
 static bool
-process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
+proc_path(char output[PATH_MAX], const char *proc_root, pid_t pid,
+          const char *leaf)
 {
-    char path[64];
+    int amount;
+    if (output == NULL || proc_root == NULL || proc_root[0] != '/') {
+        return false;
+    }
+    amount = leaf == NULL
+        ? snprintf(output, PATH_MAX, "%s/%ld", proc_root, (long)pid)
+        : snprintf(output, PATH_MAX, "%s/%ld/%s", proc_root, (long)pid,
+                   leaf);
+    return amount >= 0 && (size_t)amount < (size_t)PATH_MAX;
+}
+
+static enum kvalve_process_scan_result
+process_matches_launcher(const char *proc_root, pid_t pid,
+                         const char *launcher, const char *resolved)
+{
+    char path[PATH_MAX];
     char executable[PATH_MAX];
     char argument[PATH_MAX];
     char chunk[4096];
@@ -150,22 +166,33 @@ process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
     bool ended_at_boundary = true;
     enum { COMMAND_LINE_CAP = 1024 * 1024 };
 
-    (void)snprintf(path, sizeof(path), "/proc/%ld", (long)pid);
-    if (stat(path, &process_info) != 0 || process_info.st_uid != geteuid()) {
-        return false;
+    if (!proc_path(path, proc_root, pid, NULL)) {
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
     }
-    (void)snprintf(path, sizeof(path), "/proc/%ld/exe", (long)pid);
+    if (stat(path, &process_info) != 0) {
+        return errno == ENOENT ? KVALVE_PROCESS_SCAN_CLEAR
+                               : KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
+    if (process_info.st_uid != geteuid()) {
+        return KVALVE_PROCESS_SCAN_CLEAR;
+    }
+    if (!proc_path(path, proc_root, pid, "exe")) {
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
     length = readlink(path, executable, sizeof(executable) - 1U);
-    if (length > 0) {
+    if (length > 0 && (size_t)length < sizeof(executable) - 1U) {
         executable[(size_t)length] = '\0';
         if (strcmp(executable, resolved) == 0) {
-            return true;
+            return KVALVE_PROCESS_SCAN_FOUND;
         }
     }
-    (void)snprintf(path, sizeof(path), "/proc/%ld/cmdline", (long)pid);
+    if (!proc_path(path, proc_root, pid, "cmdline")) {
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
     descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (descriptor < 0) {
-        return kill(pid, 0) == 0 || errno == EPERM;
+        return kill(pid, 0) == 0 || errno == EPERM
+            ? KVALVE_PROCESS_SCAN_UNAVAILABLE : KVALVE_PROCESS_SCAN_CLEAR;
     }
     for (;;) {
         size_t index;
@@ -174,7 +201,7 @@ process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
         } while (length < 0 && errno == EINTR);
         if (length < 0) {
             (void)close(descriptor);
-            return true;
+            return KVALVE_PROCESS_SCAN_UNAVAILABLE;
         }
         if (length == 0) {
             break;
@@ -182,7 +209,7 @@ process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
         total += (size_t)length;
         if (total > (size_t)COMMAND_LINE_CAP) {
             (void)close(descriptor);
-            return true;
+            return KVALVE_PROCESS_SCAN_UNAVAILABLE;
         }
         for (index = 0U; index < (size_t)length; ++index) {
             if (chunk[index] == '\0') {
@@ -191,7 +218,7 @@ process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
                     if (strcmp(argument, launcher) == 0
                             || strcmp(argument, resolved) == 0) {
                         (void)close(descriptor);
-                        return true;
+                        return KVALVE_PROCESS_SCAN_FOUND;
                     }
                 }
                 argument_length = 0U;
@@ -207,27 +234,33 @@ process_matches_launcher(pid_t pid, const char *launcher, const char *resolved)
             }
         }
     }
-    (void)close(descriptor);
+    if (close(descriptor) != 0) {
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
     /* A live same-user process with a malformed/truncated cmdline is
      * ambiguous. Refuse concurrency rather than silently treating it as
      * unrelated-to-Steam evidence. Zombies have an empty, valid cmdline. */
-    return total > 0U && !ended_at_boundary;
+    return total > 0U && !ended_at_boundary
+        ? KVALVE_PROCESS_SCAN_UNAVAILABLE : KVALVE_PROCESS_SCAN_CLEAR;
 }
 
-bool
-kvalve_unrelated_launcher_running(const char *launcher, pid_t except_pid)
+enum kvalve_process_scan_result
+kvalve_scan_unrelated_launcher(const char *proc_root, const char *launcher,
+                               pid_t except_pid)
 {
     DIR *processes;
     struct dirent *entry;
     char resolved[PATH_MAX];
-    bool found = false;
-    if (launcher == NULL || realpath(launcher, resolved) == NULL) {
-        return false;
+    enum kvalve_process_scan_result result = KVALVE_PROCESS_SCAN_CLEAR;
+    if (proc_root == NULL || proc_root[0] != '/' || launcher == NULL
+            || realpath(launcher, resolved) == NULL) {
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
     }
-    processes = opendir("/proc");
+    processes = opendir(proc_root);
     if (processes == NULL) {
-        return false;
+        return KVALVE_PROCESS_SCAN_UNAVAILABLE;
     }
+    errno = 0;
     while ((entry = readdir(processes)) != NULL) {
         char *end;
         long raw;
@@ -241,11 +274,18 @@ kvalve_unrelated_launcher_running(const char *launcher, pid_t except_pid)
                 || (pid_t)raw == getpid()) {
             continue;
         }
-        if (process_matches_launcher((pid_t)raw, launcher, resolved)) {
-            found = true;
+        result = process_matches_launcher(
+            proc_root, (pid_t)raw, launcher, resolved);
+        if (result != KVALVE_PROCESS_SCAN_CLEAR) {
             break;
         }
+        errno = 0;
     }
-    (void)closedir(processes);
-    return found;
+    if (result == KVALVE_PROCESS_SCAN_CLEAR && errno != 0) {
+        result = KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
+    if (closedir(processes) != 0 && result == KVALVE_PROCESS_SCAN_CLEAR) {
+        result = KVALVE_PROCESS_SCAN_UNAVAILABLE;
+    }
+    return result;
 }

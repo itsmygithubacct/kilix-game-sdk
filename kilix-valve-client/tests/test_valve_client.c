@@ -221,6 +221,12 @@ test_probe(const struct fixture *fixture)
         "pin_policy_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
         "unexpected=scope-expansion\n";
     char conflicting_path[PATH_MAX];
+    char test_executable[PATH_MAX] = {0};
+    char ready_byte;
+    int ready_pipe[2] = {-1, -1};
+    int child_status;
+    int pipe_result;
+    pid_t unrelated_pid = -1;
     kvalve_client_context *context;
     kvalve_client_status *status = NULL;
     kvalve_client_result result;
@@ -240,6 +246,60 @@ test_probe(const struct fixture *fixture)
     CHECK(kvalve_client_status_launcher_verified(status));
     CHECK(strcmp(kvalve_client_status_diagnostic(status)->code,
                  "system-layer-exact") == 0);
+    kvalve_client_status_free(status);
+    kvalve_client_context_free(context);
+
+    CHECK(realpath("/proc/self/exe", test_executable) != NULL);
+    pipe_result = pipe(ready_pipe);
+    CHECK(pipe_result == 0);
+    if (pipe_result == 0) {
+        unrelated_pid = fork();
+    }
+    CHECK(unrelated_pid >= 0);
+    if (unrelated_pid == 0) {
+        (void)close(ready_pipe[0]);
+        (void)write(ready_pipe[1], "R", 1U);
+        (void)close(ready_pipe[1]);
+        for (;;) {
+            (void)pause();
+        }
+    }
+    if (unrelated_pid > 0) {
+        (void)close(ready_pipe[1]);
+        CHECK(read(ready_pipe[0], &ready_byte, 1U) == 1);
+        (void)close(ready_pipe[0]);
+        context = configured_context(
+            fixture, fixture->helper, test_executable, fixture->policy,
+            fixture->architectures, fixture->package_status, "x86_64");
+        CHECK(context != NULL);
+        CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+        CHECK(kvalve_client_probe(context, status)
+              == KVALVE_CLIENT_ERR_UNRELATED_INSTANCE);
+        CHECK(kvalve_client_status_classification(status)
+              == KVALVE_CLIENT_INSTALL_UNRELATED_RUNNING);
+        CHECK(strcmp(kvalve_client_status_diagnostic(status)->code,
+                     "unrelated-steam-running") == 0);
+        kvalve_client_status_free(status);
+        kvalve_client_context_free(context);
+        CHECK(kill(unrelated_pid, SIGTERM) == 0);
+        CHECK(waitpid(unrelated_pid, &child_status, 0) == unrelated_pid);
+        CHECK(WIFSIGNALED(child_status));
+    } else {
+        (void)close(ready_pipe[0]);
+        (void)close(ready_pipe[1]);
+    }
+
+    context = configured_context(
+        fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, fixture->policy,
+        fixture->architectures, fixture->package_status, "x86_64");
+    CHECK(context != NULL);
+    CHECK(kvalve_test_context_proc_root(context, fixture->missing));
+    CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_probe(context, status) == KVALVE_CLIENT_ERR_PERMISSION);
+    CHECK(kvalve_client_status_classification(status)
+          == KVALVE_CLIENT_INSTALL_PARTIAL);
+    CHECK(strcmp(kvalve_client_status_diagnostic(status)->code,
+                 "runtime-process-scan-unavailable") == 0);
     kvalve_client_status_free(status);
     kvalve_client_context_free(context);
 
@@ -328,12 +388,18 @@ test_install_boundary(const struct fixture *fixture)
     kvalve_client_context *context;
     kvalve_client_operation *operation = (kvalve_client_operation *)fixture;
     char output[4096];
-    int descriptors[2];
+    int descriptors[2] = {-1, -1};
+    int pipe_result;
     ssize_t length;
     context = configured_context(
         fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, fixture->policy,
         fixture->architectures, fixture->package_status, "x86_64");
-    CHECK(pipe(descriptors) == 0);
+    pipe_result = pipe(descriptors);
+    CHECK(pipe_result == 0);
+    if (pipe_result != 0) {
+        kvalve_client_context_free(context);
+        return;
+    }
     CHECK(kvalve_client_plan_install(context, descriptors[1])
           == KVALVE_CLIENT_ERR_AUTHORIZATION_REQUIRED);
     (void)close(descriptors[1]);

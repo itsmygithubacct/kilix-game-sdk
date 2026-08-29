@@ -14,3 +14,5 @@
 - Freeze the 9/9 install states, 6/6 terminal outcomes, 7/7 client-update
   states, and 9/9 non-failure tab lifecycle states in the public contract.
 - Add structured, bounded diagnostics and pollable lifecycle handles.
+- Treat an unavailable or ambiguous process-table scan as a non-launching
+  permission result rather than evidence that no unrelated Steam exists.

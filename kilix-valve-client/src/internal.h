@@ -21,6 +21,13 @@
 #define KVALVE_DEFAULT_POLICY "/usr/share/plebian-os/steam/policy-v1.manifest"
 #define KVALVE_DEFAULT_DPKG_ARCH "/var/lib/dpkg/arch"
 #define KVALVE_DEFAULT_DPKG_STATUS "/var/lib/dpkg/status"
+#define KVALVE_DEFAULT_PROC_ROOT "/proc"
+
+enum kvalve_process_scan_result {
+    KVALVE_PROCESS_SCAN_CLEAR = 0,
+    KVALVE_PROCESS_SCAN_FOUND,
+    KVALVE_PROCESS_SCAN_UNAVAILABLE
+};
 
 struct kvalve_diagnostic_storage {
     kvalve_client_diagnostic view;
@@ -34,6 +41,7 @@ struct kvalve_client_context {
     char policy[PATH_MAX];
     char dpkg_arch[PATH_MAX];
     char dpkg_status[PATH_MAX];
+    char proc_root[PATH_MAX];
     char machine[32];
     uid_t trusted_uid;
     bool require_root_owner;
@@ -89,13 +97,16 @@ bool kvalve_process_start_time(pid_t pid, uint64_t *start_time);
 kvalve_client_result kvalve_stop_process_group(
     pid_t pid, pid_t process_group, uint64_t start_time, unsigned timeout_ms,
     struct kvalve_diagnostic_storage *diagnostic);
-bool kvalve_unrelated_launcher_running(const char *launcher, pid_t except_pid);
+enum kvalve_process_scan_result kvalve_scan_unrelated_launcher(
+    const char *proc_root, const char *launcher, pid_t except_pid);
 
 #ifdef KVALVE_CLIENT_TESTING
 bool kvalve_test_context_paths(kvalve_client_context *context,
                                const char *helper, const char *launcher,
                                const char *policy, const char *dpkg_arch,
                                const char *dpkg_status, const char *machine);
+bool kvalve_test_context_proc_root(kvalve_client_context *context,
+                                   const char *proc_root);
 kvalve_client_result kvalve_test_operation_start(
     unsigned runtime_ms, unsigned deadline_ms,
     kvalve_client_operation **out);

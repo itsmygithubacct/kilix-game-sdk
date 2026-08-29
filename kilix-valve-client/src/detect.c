@@ -417,7 +417,7 @@ kvalve_client_probe(kvalve_client_context *context,
     char architectures[4096];
     bool any;
     bool system_verified = false;
-    bool unrelated_running;
+    enum kvalve_process_scan_result process_scan = KVALVE_PROCESS_SCAN_CLEAR;
     kvalve_client_result result;
     if (context == NULL || status == NULL) {
         return KVALVE_CLIENT_ERR_INVALID;
@@ -443,15 +443,25 @@ kvalve_client_probe(kvalve_client_context *context,
         && has_exact_line(architectures, "i386");
     status->package_installed = package_is_installed(context->dpkg_status);
 
-    unrelated_running = kvalve_unrelated_launcher_running(
-        context->launcher, 0);
-    if (!unrelated_running && status->helper_verified
+    if (status->launcher_verified) {
+        process_scan = kvalve_scan_unrelated_launcher(
+            context->proc_root, context->launcher, 0);
+    }
+    if (process_scan == KVALVE_PROCESS_SCAN_CLEAR && status->helper_verified
             && status->launcher_verified && status->policy_verified
             && status->i386_enabled && status->package_installed) {
         system_verified = helper_verifies_system(context);
     }
 
-    if (unrelated_running) {
+    if (process_scan == KVALVE_PROCESS_SCAN_UNAVAILABLE) {
+        status->classification = KVALVE_CLIENT_INSTALL_PARTIAL;
+        result = KVALVE_CLIENT_ERR_PERMISSION;
+        kvalve_diag_set(&status->diagnostic, result,
+                        "runtime-process-scan-unavailable",
+                        "The process table could not be inspected safely; "
+                        "no Steam action is permitted.",
+                        true);
+    } else if (process_scan == KVALVE_PROCESS_SCAN_FOUND) {
         status->classification = KVALVE_CLIENT_INSTALL_UNRELATED_RUNNING;
         result = KVALVE_CLIENT_ERR_UNRELATED_INSTANCE;
         kvalve_diag_set(&status->diagnostic, result,

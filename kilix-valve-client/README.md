@@ -42,9 +42,11 @@ outer lifecycle.
 
 An exact unrelated launcher process is reported and is never attached to,
 reparented, or signalled. No name-wide stop implementation is present. The
-future provider must terminate only its opaque owned scope. Steam's mutable
-home data, libraries, prefixes, saves, workshop content, credentials, and
-updater payloads are never parsed or removed.
+process-table scan has clear, found, and unavailable outcomes; unavailable or
+ambiguous evidence refuses launch. The future provider must terminate only its
+opaque owned scope. Steam's mutable home data, libraries, prefixes, saves,
+workshop content, credentials, and updater payloads are never parsed or
+removed.
 
 ## Build and inspect
 

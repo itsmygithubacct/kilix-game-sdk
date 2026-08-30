@@ -561,6 +561,9 @@ test_operations(void)
     operation = NULL;
     CHECK(kvalve_test_operation_start(1000U, 2000U, &operation)
           == KVALVE_CLIENT_OK);
+    CHECK(operation != NULL && operation->pid > 1
+          && operation->process_group == operation->pid
+          && getpgid(operation->pid) == operation->process_group);
     CHECK(kvalve_client_operation_cancel(operation) == KVALVE_CLIENT_OK);
     CHECK(kvalve_client_operation_poll(operation, &state) == KVALVE_CLIENT_OK);
     CHECK(state == KVALVE_CLIENT_OPERATION_CANCELLED);

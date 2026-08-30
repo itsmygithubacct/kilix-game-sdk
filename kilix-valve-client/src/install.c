@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -201,6 +202,59 @@ kvalve_client_operation_free(kvalve_client_operation *operation)
 }
 
 #ifdef KVALVE_CLIENT_TESTING
+#define KVALVE_OPERATION_START_TIMEOUT_MS 1000U
+
+static kvalve_client_result
+wait_for_operation_start(int event_fd)
+{
+    struct pollfd readiness;
+    uint64_t deadline = kvalve_now_ms() + KVALVE_OPERATION_START_TIMEOUT_MS;
+    char marker;
+    for (;;) {
+        ssize_t amount = read(event_fd, &marker, 1U);
+        uint64_t now;
+        int timeout;
+        int poll_result;
+        if (amount == 1) {
+            return marker == 'S' ? KVALVE_CLIENT_OK
+                                 : KVALVE_CLIENT_ERR_RUNTIME;
+        }
+        if (amount == 0) {
+            return KVALVE_CLIENT_ERR_RUNTIME;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            return KVALVE_CLIENT_ERR_IO;
+        }
+        now = kvalve_now_ms();
+        if (now >= deadline) {
+            return KVALVE_CLIENT_ERR_TIMEOUT;
+        }
+        timeout = (int)(deadline - now);
+        readiness.fd = event_fd;
+        readiness.events = POLLIN;
+        readiness.revents = 0;
+        poll_result = poll(&readiness, 1U, timeout);
+        if (poll_result == 0) {
+            return KVALVE_CLIENT_ERR_TIMEOUT;
+        }
+        if (poll_result < 0 && errno != EINTR) {
+            return KVALVE_CLIENT_ERR_IO;
+        }
+    }
+}
+
+static void
+stop_test_child(pid_t child, bool process_group_ready)
+{
+    if (process_group_ready) {
+        (void)kill(-child, SIGKILL);
+    } else {
+        (void)kill(child, SIGKILL);
+    }
+    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {
+    }
+}
+
 kvalve_client_result
 kvalve_test_operation_start(unsigned runtime_ms, unsigned deadline_ms,
                             kvalve_client_operation **out)
@@ -208,6 +262,7 @@ kvalve_test_operation_start(unsigned runtime_ms, unsigned deadline_ms,
     int events[2];
     pid_t child;
     kvalve_client_operation *operation;
+    kvalve_client_result start_result;
     if (out == NULL) {
         return KVALVE_CLIENT_ERR_INVALID;
     }
@@ -223,9 +278,13 @@ kvalve_test_operation_start(unsigned runtime_ms, unsigned deadline_ms,
     }
     if (child == 0) {
         struct timespec delay;
+        char started = 'S';
         char ready = 'R';
         (void)close(events[0]);
         if (setsid() < 0) {
+            _exit(70);
+        }
+        if (!write_all(events[1], &started, 1U)) {
             _exit(70);
         }
         delay.tv_sec = (time_t)(runtime_ms / 1000U);
@@ -236,10 +295,15 @@ kvalve_test_operation_start(unsigned runtime_ms, unsigned deadline_ms,
         _exit(0);
     }
     (void)close(events[1]);
+    start_result = wait_for_operation_start(events[0]);
+    if (start_result != KVALVE_CLIENT_OK) {
+        stop_test_child(child, false);
+        (void)close(events[0]);
+        return start_result;
+    }
     operation = calloc(1U, sizeof(*operation));
     if (operation == NULL) {
-        (void)kill(child, SIGKILL);
-        (void)waitpid(child, NULL, 0);
+        stop_test_child(child, true);
         (void)close(events[0]);
         return KVALVE_CLIENT_ERR_IO;
     }

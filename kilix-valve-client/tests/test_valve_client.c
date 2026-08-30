@@ -220,6 +220,15 @@ test_probe(const struct fixture *fixture)
         "key_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
         "pin_policy_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
         "unexpected=scope-expansion\n";
+    static const char truncated_digest_policy[] =
+        "schema=plebian-os.steam-policy/v1\n"
+        "authorization_schema=kilix.install.authorization/v2\n"
+        "architectures=amd64,i386\n"
+        "packages=steam-launcher,steam-libs-amd64:amd64,steam-libs-i386:i386\n"
+        "helper_modes=install,repair,verify\n"
+        "archive_policy_sha256=a\n"
+        "key_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+        "pin_policy_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n";
     char conflicting_path[PATH_MAX];
     char test_executable[PATH_MAX] = {0};
     char ready_byte;
@@ -305,6 +314,19 @@ test_probe(const struct fixture *fixture)
 
     CHECK(path_join(conflicting_path, fixture->root, "conflicting-policy"));
     CHECK(write_fixture(conflicting_path, conflicting_policy, 0600));
+    context = configured_context(
+        fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, conflicting_path,
+        fixture->architectures, fixture->package_status, "x86_64");
+    CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_probe(context, status) == KVALVE_CLIENT_ERR_CONFLICTING);
+    CHECK(kvalve_client_status_classification(status)
+          == KVALVE_CLIENT_INSTALL_CONFLICTING);
+    CHECK(!kvalve_client_status_policy_verified(status));
+    kvalve_client_status_free(status);
+    kvalve_client_context_free(context);
+    (void)unlink(conflicting_path);
+
+    CHECK(write_fixture(conflicting_path, truncated_digest_policy, 0600));
     context = configured_context(
         fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, conflicting_path,
         fixture->architectures, fixture->package_status, "x86_64");
@@ -427,6 +449,45 @@ test_install_boundary(const struct fixture *fixture)
 }
 
 static void
+test_helper_descriptor_boundary(const struct fixture *fixture)
+{
+    char helper[PATH_MAX];
+    char script[256];
+    int descriptors[2] = {-1, -1};
+    int amount;
+    int pipe_result;
+    kvalve_client_context *context = NULL;
+    kvalve_client_status *status = NULL;
+
+    pipe_result = pipe(descriptors);
+    CHECK(pipe_result == 0);
+    if (pipe_result != 0) {
+        return;
+    }
+    CHECK(path_join(helper, fixture->root, "descriptor-helper"));
+    amount = snprintf(
+        script, sizeof(script),
+        "#!/bin/sh\n[ \"${1:-}\" = --verify ] && "
+        "[ ! -e /proc/self/fd/%d ]\n",
+        descriptors[0]);
+    CHECK(amount >= 0 && (size_t)amount < sizeof(script));
+    CHECK(write_fixture(helper, script, 0700));
+    context = configured_context(
+        fixture, helper, KVALVE_TEST_FAKE_STEAM, fixture->policy,
+        fixture->architectures, fixture->package_status, "x86_64");
+    CHECK(context != NULL);
+    CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_probe(context, status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_status_helper_verified(status));
+
+    kvalve_client_status_free(status);
+    kvalve_client_context_free(context);
+    (void)close(descriptors[0]);
+    (void)close(descriptors[1]);
+    (void)unlink(helper);
+}
+
+static void
 test_state_names(void)
 {
     static const char *const install_states[] = {
@@ -544,6 +605,7 @@ main(void)
         return 70;
     }
     test_probe(&fixture);
+    test_helper_descriptor_boundary(&fixture);
     test_install_boundary(&fixture);
     test_state_names();
     test_operations();

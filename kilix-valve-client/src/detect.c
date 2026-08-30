@@ -1,6 +1,5 @@
 #include "internal.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -195,26 +194,28 @@ consume_exact_line(const char **cursor, const char *wanted)
 static bool
 consume_digest_line(const char **cursor, const char *prefix)
 {
+    const char *newline;
     size_t index;
     size_t prefix_length;
     if (cursor == NULL || *cursor == NULL || prefix == NULL) {
         return false;
     }
     prefix_length = strlen(prefix);
-    if (strncmp(*cursor, prefix, prefix_length) != 0) {
+    newline = strchr(*cursor, '\n');
+    if (newline == NULL
+            || (size_t)(newline - *cursor) != prefix_length + 64U
+            || strncmp(*cursor, prefix, prefix_length) != 0) {
         return false;
     }
     for (index = prefix_length; index < prefix_length + 64U; ++index) {
         unsigned char byte = (unsigned char)(*cursor)[index];
-        if (!isdigit(byte) && (byte < (unsigned char)'a'
-                               || byte > (unsigned char)'f')) {
+        if (!((byte >= (unsigned char)'0' && byte <= (unsigned char)'9')
+                || (byte >= (unsigned char)'a'
+                    && byte <= (unsigned char)'f'))) {
             return false;
         }
     }
-    if ((*cursor)[index] != '\n') {
-        return false;
-    }
-    *cursor += index + 1U;
+    *cursor = newline + 1;
     return true;
 }
 
@@ -349,6 +350,8 @@ helper_verifies_system(const kvalve_client_context *context)
                 &actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) != 0
             || posix_spawn_file_actions_addopen(
                 &actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) != 0
+            || posix_spawn_file_actions_addclosefrom_np(
+                &actions, STDERR_FILENO + 1) != 0
             || posix_spawnattr_init(&attributes) != 0) {
         goto cleanup;
     }

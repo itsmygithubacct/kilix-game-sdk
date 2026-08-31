@@ -116,6 +116,84 @@ write_large_package_status(const char *path)
     return close(descriptor) == 0;
 }
 
+/* Where the private fixture tree is created.
+ *
+ * TMPDIR wins when it is set to an absolute path, so an operator can still
+ * place the fixture deliberately.  It is not REQUIRED: an unset TMPDIR used to
+ * abort the whole binary with "could not create private test fixture", which
+ * is the POSIX default state and told the reader nothing about what was wrong.
+ *
+ * The fallback is the directory that already holds the fixture executable.
+ * KVALVE_TEST_FAKE_STEAM is an absolute path supplied by the build, and the
+ * library's own ancestry rule has to hold for it anyway or every launcher
+ * check in this file would fail -- so a checkout that can run this test at all
+ * can host the fixture.  /tmp deliberately is NOT the fallback: it is mode
+ * 1777 on a stock system, and kvalve_secure_file rejects any ancestor that is
+ * group- or other-writable, so defaulting there would trade one opaque failure
+ * for another.
+ */
+static bool
+fixture_parent(char output[PATH_MAX])
+{
+    static const char fake_steam[] = KVALVE_TEST_FAKE_STEAM;
+    const char *temporary = getenv("TMPDIR");
+    const char *separator;
+    size_t length;
+    int amount;
+    if (temporary != NULL && temporary[0] == '/') {
+        amount = snprintf(output, PATH_MAX, "%s", temporary);
+        return amount >= 0 && (size_t)amount < (size_t)PATH_MAX;
+    }
+    separator = strrchr(fake_steam, '/');
+    if (separator == NULL || separator == fake_steam) {
+        return false;
+    }
+    length = (size_t)(separator - fake_steam);
+    if (length >= (size_t)PATH_MAX) {
+        return false;
+    }
+    (void)memcpy(output, fake_steam, length);
+    output[length] = '\0';
+    return true;
+}
+
+/* Report an environment the library's own rules reject, naming the path and
+ * the rule, instead of leaving the reader with a bare "could not create". */
+static void
+explain_insecure(const char *label, const char *path)
+{
+    char copy[PATH_MAX];
+    char *slash;
+    struct stat info;
+    int amount = snprintf(copy, sizeof(copy), "%s", path);
+    (void)fprintf(stderr, "%s is not usable: %s\n", label, path);
+    if (amount < 0 || (size_t)amount >= sizeof(copy)) {
+        return;
+    }
+    for (;;) {
+        if (lstat(copy, &info) == 0
+                && (info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+            (void)fprintf(stderr,
+                          "  %s is group- or other-writable (mode %04o); "
+                          "kvalve_secure_file refuses any such ancestor\n",
+                          copy, (unsigned)(info.st_mode & 07777));
+            return;
+        }
+        slash = strrchr(copy, '/');
+        if (slash == NULL) {
+            return;
+        }
+        if (slash == copy) {
+            if (copy[1] == '\0') {
+                return;
+            }
+            copy[1] = '\0';
+        } else {
+            *slash = '\0';
+        }
+    }
+}
+
 static bool
 create_fixture(struct fixture *fixture)
 {
@@ -131,17 +209,29 @@ create_fixture(struct fixture *fixture)
     static const char package_status[] =
         "Package: unrelated\nStatus: install ok installed\nArchitecture: amd64\n\n"
         "Package: steam-launcher\nStatus: install ok installed\nArchitecture: all\n";
-    const char *temporary = getenv("TMPDIR");
+    char parent[PATH_MAX];
     int amount;
     (void)memset(fixture, 0, sizeof(*fixture));
-    if (temporary == NULL || temporary[0] != '/') {
+    if (!fixture_parent(parent)) {
+        (void)fprintf(stderr,
+                      "no usable fixture directory: TMPDIR is not an absolute "
+                      "path and %s has no directory component\n",
+                      KVALVE_TEST_FAKE_STEAM);
         return false;
     }
     amount = snprintf(fixture->root, sizeof(fixture->root),
-                      "%s/kvalve-test-XXXXXX", temporary);
-    if (amount < 0 || (size_t)amount >= sizeof(fixture->root)
-            || mkdtemp(fixture->root) == NULL
-            || chmod(fixture->root, 0700) != 0
+                      "%s/kvalve-test-XXXXXX", parent);
+    if (amount < 0 || (size_t)amount >= sizeof(fixture->root)) {
+        (void)fprintf(stderr, "fixture path under %s exceeds PATH_MAX\n",
+                      parent);
+        return false;
+    }
+    if (mkdtemp(fixture->root) == NULL) {
+        (void)fprintf(stderr, "could not create a fixture directory under %s: "
+                      "%s\n", parent, strerror(errno));
+        return false;
+    }
+    if (chmod(fixture->root, 0700) != 0
             || !path_join(fixture->helper, fixture->root, "helper")
             || !path_join(fixture->policy, fixture->root, "policy")
             || !path_join(fixture->architectures, fixture->root, "arch")
@@ -605,6 +695,23 @@ main(void)
     struct fixture fixture;
     if (!create_fixture(&fixture)) {
         (void)fprintf(stderr, "could not create private test fixture\n");
+        return 70;
+    }
+    /* Both of these are checked with the library's own rule rather than a
+     * restatement of it, so the test and kvalve_secure_file cannot disagree
+     * about what "secure" means.  Checking them here turns an environment
+     * problem into one named line instead of nineteen failed assertions
+     * scattered across the probe, install and session suites. */
+    if (!kvalve_secure_file(fixture.root, S_IFDIR, geteuid(), false, false)) {
+        explain_insecure("the fixture directory", fixture.root);
+        remove_fixture(&fixture);
+        return 70;
+    }
+    if (!kvalve_secure_file(KVALVE_TEST_FAKE_STEAM, S_IFREG, geteuid(), true,
+                            false)) {
+        explain_insecure("the checkout holding the fixture executable",
+                         KVALVE_TEST_FAKE_STEAM);
+        remove_fixture(&fixture);
         return 70;
     }
     test_probe(&fixture);

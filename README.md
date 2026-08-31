@@ -28,6 +28,21 @@ cd kilix-game-sdk
 make test
 ```
 
+`--recurse-submodules` is not optional. `make test` begins with
+`tools/check-submodules.sh`, which refuses an uninitialised, unpinned or
+conflicted submodule at any depth, so a plain clone stops before the first
+test. An existing plain clone is repaired with
+`git submodule update --init --recursive`.
+
+**Check the SDK out somewhere with no group- or other-writable ancestor.**
+`kilix-valve-client` refuses to read a policy, helper or launcher reachable
+through a directory that other users can write to, and applies that rule to
+every ancestor up to `/`. A checkout under `/tmp` (mode `1777` on a stock
+system) therefore fails its tests wherever it is otherwise correct. `$HOME` is
+fine; a shared scratch directory generally is not. The same rule governs
+`TMPDIR` when it is set: leave it unset and the tests place their fixtures
+beside their own build output, which is already subject to the rule.
+
 The SDK owns one copy of each external runtime dependency below
 `kilix-game-kit/third_party/`. The renderers and interface component reuse that
 same `soft-raster` checkout.

@@ -18,17 +18,43 @@ owner_allowed(uid_t owner, uid_t trusted_uid, bool require_root_owner)
     return owner == 0U || (!require_root_owner && owner == trusted_uid);
 }
 
+static void
+trust_note(struct kvalve_trust_report *report, enum kvalve_trust_reason reason,
+           const char *path, const struct stat *info)
+{
+    if (report == NULL) {
+        return;
+    }
+    report->reason = reason;
+    (void)snprintf(report->path, sizeof(report->path), "%s",
+                   path != NULL ? path : "");
+    report->mode = info != NULL ? (unsigned)(info->st_mode & 07777) : 0U;
+    report->owner = info != NULL ? info->st_uid : (uid_t)-1;
+}
+
+bool
+kvalve_trust_reason_is_ancestry(enum kvalve_trust_reason reason)
+{
+    return reason == KVALVE_TRUST_ANCESTOR_UNREADABLE
+        || reason == KVALVE_TRUST_ANCESTOR_NOT_DIRECTORY
+        || reason == KVALVE_TRUST_ANCESTOR_OWNER
+        || reason == KVALVE_TRUST_ANCESTOR_WRITABLE;
+}
+
 static bool
-secure_ancestry(const char *path, uid_t trusted_uid, bool require_root_owner)
+secure_ancestry(const char *path, uid_t trusted_uid, bool require_root_owner,
+                struct kvalve_trust_report *report)
 {
     char copy[PATH_MAX];
     char *slash;
     struct stat info;
     if (!kvalve_copy_path(copy, path) || copy[0] != '/') {
+        trust_note(report, KVALVE_TRUST_PATH_INVALID, path, NULL);
         return false;
     }
     slash = strrchr(copy, '/');
     if (slash == NULL) {
+        trust_note(report, KVALVE_TRUST_PATH_INVALID, path, NULL);
         return false;
     }
     if (slash == copy) {
@@ -37,10 +63,21 @@ secure_ancestry(const char *path, uid_t trusted_uid, bool require_root_owner)
         *slash = '\0';
     }
     for (;;) {
-        if (lstat(copy, &info) != 0 || !S_ISDIR(info.st_mode)
-                || !owner_allowed(info.st_uid, trusted_uid,
-                                  require_root_owner)
-                || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+        if (lstat(copy, &info) != 0) {
+            trust_note(report, KVALVE_TRUST_ANCESTOR_UNREADABLE, copy, NULL);
+            return false;
+        }
+        if (!S_ISDIR(info.st_mode)) {
+            trust_note(report, KVALVE_TRUST_ANCESTOR_NOT_DIRECTORY, copy,
+                       &info);
+            return false;
+        }
+        if (!owner_allowed(info.st_uid, trusted_uid, require_root_owner)) {
+            trust_note(report, KVALVE_TRUST_ANCESTOR_OWNER, copy, &info);
+            return false;
+        }
+        if ((info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+            trust_note(report, KVALVE_TRUST_ANCESTOR_WRITABLE, copy, &info);
             return false;
         }
         if (strcmp(copy, "/") == 0) {
@@ -48,6 +85,7 @@ secure_ancestry(const char *path, uid_t trusted_uid, bool require_root_owner)
         }
         slash = strrchr(copy, '/');
         if (slash == NULL) {
+            trust_note(report, KVALVE_TRUST_PATH_INVALID, copy, NULL);
             return false;
         }
         if (slash == copy) {
@@ -59,47 +97,107 @@ secure_ancestry(const char *path, uid_t trusted_uid, bool require_root_owner)
 }
 
 bool
+kvalve_secure_file_reported(const char *path, mode_t kind, uid_t trusted_uid,
+                            bool executable, bool require_root_owner,
+                            struct kvalve_trust_report *report)
+{
+    struct stat info;
+    if (report != NULL) {
+        (void)memset(report, 0, sizeof(*report));
+        report->reason = KVALVE_TRUST_OK;
+        report->owner = (uid_t)-1;
+    }
+    if (path == NULL || path[0] != '/') {
+        trust_note(report, KVALVE_TRUST_PATH_INVALID, path, NULL);
+        return false;
+    }
+    if (lstat(path, &info) != 0) {
+        trust_note(report, KVALVE_TRUST_ABSENT, path, NULL);
+        return false;
+    }
+    if ((info.st_mode & S_IFMT) != kind) {
+        trust_note(report, KVALVE_TRUST_WRONG_TYPE, path, &info);
+        return false;
+    }
+    if (!owner_allowed(info.st_uid, trusted_uid, require_root_owner)) {
+        trust_note(report, KVALVE_TRUST_OWNER, path, &info);
+        return false;
+    }
+    if ((info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+        trust_note(report, KVALVE_TRUST_WRITABLE, path, &info);
+        return false;
+    }
+    if (executable && (info.st_mode & S_IXUSR) == 0) {
+        trust_note(report, KVALVE_TRUST_NOT_EXECUTABLE, path, &info);
+        return false;
+    }
+    return secure_ancestry(path, trusted_uid, require_root_owner, report);
+}
+
+bool
 kvalve_secure_file(const char *path, mode_t kind, uid_t trusted_uid,
                    bool executable, bool require_root_owner)
 {
+    return kvalve_secure_file_reported(path, kind, trusted_uid, executable,
+                                       require_root_owner, NULL);
+}
+
+bool
+kvalve_secure_launcher_reported(const kvalve_client_context *context,
+                                struct kvalve_trust_report *report)
+{
     struct stat info;
-    if (path == NULL || path[0] != '/' || lstat(path, &info) != 0
-            || (info.st_mode & S_IFMT) != kind
-            || !owner_allowed(info.st_uid, trusted_uid, require_root_owner)
-            || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0
-            || (executable && (info.st_mode & S_IXUSR) == 0)) {
+    char resolved[PATH_MAX];
+    if (report != NULL) {
+        (void)memset(report, 0, sizeof(*report));
+        report->reason = KVALVE_TRUST_OK;
+        report->owner = (uid_t)-1;
+    }
+    if (context == NULL) {
+        trust_note(report, KVALVE_TRUST_PATH_INVALID, NULL, NULL);
         return false;
     }
-    return secure_ancestry(path, trusted_uid, require_root_owner);
+    if (!context->require_root_owner) {
+        return kvalve_secure_file_reported(
+            context->launcher, S_IFREG, context->trusted_uid, true, false,
+            report);
+    }
+    if (strcmp(context->launcher, KVALVE_DEFAULT_LAUNCHER) != 0) {
+        trust_note(report, KVALVE_TRUST_PATH_INVALID, context->launcher, NULL);
+        return false;
+    }
+    if (lstat(context->launcher, &info) != 0) {
+        trust_note(report, KVALVE_TRUST_ABSENT, context->launcher, NULL);
+        return false;
+    }
+    if (S_ISREG(info.st_mode)) {
+        return kvalve_secure_file_reported(context->launcher, S_IFREG, 0U,
+                                           true, true, report);
+    }
+    if (!S_ISLNK(info.st_mode)) {
+        trust_note(report, KVALVE_TRUST_WRONG_TYPE, context->launcher, &info);
+        return false;
+    }
+    if (info.st_uid != 0U) {
+        trust_note(report, KVALVE_TRUST_OWNER, context->launcher, &info);
+        return false;
+    }
+    if (!secure_ancestry(context->launcher, 0U, true, report)) {
+        return false;
+    }
+    if (realpath(context->launcher, resolved) == NULL
+            || strcmp(resolved, KVALVE_DEFAULT_LAUNCHER_TARGET) != 0) {
+        trust_note(report, KVALVE_TRUST_WRONG_TYPE, context->launcher, &info);
+        return false;
+    }
+    return kvalve_secure_file_reported(
+        KVALVE_DEFAULT_LAUNCHER_TARGET, S_IFREG, 0U, true, true, report);
 }
 
 bool
 kvalve_secure_launcher(const kvalve_client_context *context)
 {
-    struct stat info;
-    char resolved[PATH_MAX];
-    if (context == NULL) {
-        return false;
-    }
-    if (!context->require_root_owner) {
-        return kvalve_secure_file(
-            context->launcher, S_IFREG, context->trusted_uid, true, false);
-    }
-    if (strcmp(context->launcher, KVALVE_DEFAULT_LAUNCHER) != 0
-            || lstat(context->launcher, &info) != 0) {
-        return false;
-    }
-    if (S_ISREG(info.st_mode)) {
-        return kvalve_secure_file(context->launcher, S_IFREG, 0U, true, true);
-    }
-    if (!S_ISLNK(info.st_mode) || info.st_uid != 0U
-            || !secure_ancestry(context->launcher, 0U, true)
-            || realpath(context->launcher, resolved) == NULL
-            || strcmp(resolved, KVALVE_DEFAULT_LAUNCHER_TARGET) != 0) {
-        return false;
-    }
-    return kvalve_secure_file(
-        KVALVE_DEFAULT_LAUNCHER_TARGET, S_IFREG, 0U, true, true);
+    return kvalve_secure_launcher_reported(context, NULL);
 }
 
 bool
@@ -220,14 +318,21 @@ consume_digest_line(const char **cursor, const char *prefix)
 }
 
 static bool
-policy_is_exact(const kvalve_client_context *context)
+policy_is_exact(const kvalve_client_context *context,
+                struct kvalve_trust_report *report)
 {
     char contents[KVALVE_FILE_CAP];
     const char *cursor = contents;
-    if (!kvalve_secure_file(context->policy, S_IFREG, context->trusted_uid,
-                            false, context->require_root_owner)
-            || !kvalve_read_bounded(context->policy, contents,
-                                    sizeof(contents), NULL)) {
+    if (!kvalve_secure_file_reported(context->policy, S_IFREG,
+                                     context->trusted_uid, false,
+                                     context->require_root_owner, report)) {
+        return false;
+    }
+    /* Trusted, so a false from here on is a CONTENT answer and the report is
+     * deliberately left at KVALVE_TRUST_OK: the caller uses that to tell a
+     * policy that disagrees from a policy it was never allowed to read. */
+    if (!kvalve_read_bounded(context->policy, contents, sizeof(contents),
+                             NULL)) {
         return false;
     }
     return consume_exact_line(
@@ -422,6 +527,11 @@ kvalve_client_probe(kvalve_client_context *context,
     bool system_verified = false;
     enum kvalve_process_scan_result process_scan = KVALVE_PROCESS_SCAN_CLEAR;
     kvalve_client_result result;
+    struct kvalve_trust_report helper_trust;
+    struct kvalve_trust_report launcher_trust;
+    struct kvalve_trust_report policy_trust;
+    const struct kvalve_trust_report *untrusted = NULL;
+    const char *untrusted_subject = NULL;
     if (context == NULL || status == NULL) {
         return KVALVE_CLIENT_ERR_INVALID;
     }
@@ -436,11 +546,27 @@ kvalve_client_probe(kvalve_client_context *context,
         kvalve_diag_copy(&context->diagnostic, &status->diagnostic);
         return result;
     }
-    status->helper_verified = kvalve_secure_file(
+    status->helper_verified = kvalve_secure_file_reported(
         context->helper, S_IFREG, context->trusted_uid, true,
-        context->require_root_owner);
-    status->launcher_verified = kvalve_secure_launcher(context);
-    status->policy_verified = policy_is_exact(context);
+        context->require_root_owner, &helper_trust);
+    status->launcher_verified = kvalve_secure_launcher_reported(
+        context, &launcher_trust);
+    status->policy_verified = policy_is_exact(context, &policy_trust);
+
+    /* An ancestor no one else may write to is a precondition for reading any
+     * of the three, and failing it is not evidence about the install. Pick the
+     * first subject whose refusal was an ancestry refusal, in a fixed order so
+     * the answer does not depend on which check ran first. */
+    if (kvalve_trust_reason_is_ancestry(policy_trust.reason)) {
+        untrusted = &policy_trust;
+        untrusted_subject = "policy";
+    } else if (kvalve_trust_reason_is_ancestry(helper_trust.reason)) {
+        untrusted = &helper_trust;
+        untrusted_subject = "helper";
+    } else if (kvalve_trust_reason_is_ancestry(launcher_trust.reason)) {
+        untrusted = &launcher_trust;
+        untrusted_subject = "launcher";
+    }
     status->i386_enabled = kvalve_read_bounded(
         context->dpkg_arch, architectures, sizeof(architectures), NULL)
         && has_exact_line(architectures, "i386");
@@ -456,7 +582,58 @@ kvalve_client_probe(kvalve_client_context *context,
         system_verified = helper_verifies_system(context);
     }
 
-    if (process_scan == KVALVE_PROCESS_SCAN_UNAVAILABLE) {
+    if (untrusted != NULL) {
+        /* Deliberately UNKNOWN rather than PARTIAL or CONFLICTING. The
+         * classifier did not classify: it refused to read its own inputs, and
+         * saying anything about the install would be asserting a fact it never
+         * established. This is the case that used to arrive as
+         * "system-layer-conflicting" -- a sentence about Steam, for a problem
+         * about a directory. */
+        char summary[KVALVE_DIAGNOSTIC_SUMMARY_CAP];
+        char shown[KVALVE_DIAGNOSTIC_PATH_SHOWN_CAP + 4];
+        const char *clause;
+        status->classification = KVALVE_CLIENT_INSTALL_UNKNOWN;
+        result = KVALVE_CLIENT_ERR_PERMISSION;
+        switch (untrusted->reason) {
+        case KVALVE_TRUST_ANCESTOR_WRITABLE:
+            clause = "is group- or other-writable";
+            break;
+        case KVALVE_TRUST_ANCESTOR_OWNER:
+            clause = "is owned by neither root nor this user";
+            break;
+        case KVALVE_TRUST_ANCESTOR_NOT_DIRECTORY:
+            clause = "is not a directory";
+            break;
+        default:
+            clause = "could not be examined";
+            break;
+        }
+        /* The offending ancestor is a prefix directory and is normally short.
+         * A path long enough to need truncating is marked as truncated rather
+         * than silently shortened, because a prefix of a long path is exactly
+         * what an operator cannot act on. Bounding it here also keeps the
+         * worst case provably inside KVALVE_DIAGNOSTIC_SUMMARY_CAP. */
+        if (strlen(untrusted->path) > (size_t)KVALVE_DIAGNOSTIC_PATH_SHOWN_CAP) {
+            (void)snprintf(shown, sizeof(shown), "%.*s...",
+                           KVALVE_DIAGNOSTIC_PATH_SHOWN_CAP, untrusted->path);
+        } else {
+            (void)snprintf(shown, sizeof(shown), "%s", untrusted->path);
+        }
+        if (untrusted->reason == KVALVE_TRUST_ANCESTOR_UNREADABLE) {
+            (void)snprintf(summary, sizeof(summary),
+                           "The Steam %s is not trusted: its ancestor %s "
+                           "%s. No Steam state was read.",
+                           untrusted_subject, shown, clause);
+        } else {
+            (void)snprintf(summary, sizeof(summary),
+                           "The Steam %s is not trusted: its ancestor %s "
+                           "%s (mode %04o, uid %ld). No Steam state was read.",
+                           untrusted_subject, shown, clause,
+                           untrusted->mode, (long)untrusted->owner);
+        }
+        kvalve_diag_set(&status->diagnostic, result,
+                        "system-layer-untrusted-path", summary, false);
+    } else if (process_scan == KVALVE_PROCESS_SCAN_UNAVAILABLE) {
         status->classification = KVALVE_CLIENT_INSTALL_PARTIAL;
         result = KVALVE_CLIENT_ERR_PERMISSION;
         kvalve_diag_set(&status->diagnostic, result,

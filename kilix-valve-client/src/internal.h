@@ -13,7 +13,13 @@
 #endif
 
 #define KVALVE_DIAGNOSTIC_CODE_CAP 64
-#define KVALVE_DIAGNOSTIC_SUMMARY_CAP 256
+/* Wide enough that a realistic filesystem path fits INSIDE a sentence about
+ * it. The untrusted-path diagnostic names the offending directory, and a
+ * directory long enough to be truncated is exactly the one an operator cannot
+ * identify from a prefix. The public view exposes const char *, so this bound
+ * is internal. */
+#define KVALVE_DIAGNOSTIC_SUMMARY_CAP 512
+#define KVALVE_DIAGNOSTIC_PATH_SHOWN_CAP 256
 #define KVALVE_FILE_CAP 32768
 #define KVALVE_DEFAULT_HELPER "/usr/libexec/plebian-os-steam-setup"
 #define KVALVE_DEFAULT_LAUNCHER "/usr/bin/steam"
@@ -27,6 +33,39 @@ enum kvalve_process_scan_result {
     KVALVE_PROCESS_SCAN_CLEAR = 0,
     KVALVE_PROCESS_SCAN_FOUND,
     KVALVE_PROCESS_SCAN_UNAVAILABLE
+};
+
+/* Why a path was refused as trusted input.
+ *
+ * kvalve_secure_file used to answer only true or false, so every caller that
+ * wanted to say something about a refusal had to guess. The probe guessed
+ * "conflicting": a Steam path exists but does not match trusted packaged
+ * state. That is right when the bytes differ and wrong when the bytes are
+ * perfect and the DIRECTORY above them is world-writable -- the file was never
+ * read, nothing was compared, and there is no conflict to report. Callers can
+ * now distinguish the two, and name the component that failed.
+ */
+enum kvalve_trust_reason {
+    KVALVE_TRUST_OK = 0,
+    KVALVE_TRUST_PATH_INVALID,
+    KVALVE_TRUST_ABSENT,
+    KVALVE_TRUST_WRONG_TYPE,
+    KVALVE_TRUST_OWNER,
+    KVALVE_TRUST_WRITABLE,
+    KVALVE_TRUST_NOT_EXECUTABLE,
+    KVALVE_TRUST_ANCESTOR_UNREADABLE,
+    KVALVE_TRUST_ANCESTOR_NOT_DIRECTORY,
+    KVALVE_TRUST_ANCESTOR_OWNER,
+    KVALVE_TRUST_ANCESTOR_WRITABLE
+};
+
+struct kvalve_trust_report {
+    enum kvalve_trust_reason reason;
+    /* The exact component that failed the rule: the subject path itself for a
+     * KVALVE_TRUST_* reason, or the offending directory for an ANCESTOR one. */
+    char path[PATH_MAX];
+    unsigned mode;
+    uid_t owner;
 };
 
 struct kvalve_diagnostic_storage {
@@ -89,7 +128,15 @@ bool kvalve_read_bounded(const char *path, char *buffer, size_t capacity,
                          size_t *length);
 bool kvalve_secure_file(const char *path, mode_t kind, uid_t trusted_uid,
                         bool executable, bool require_root_owner);
+bool kvalve_secure_file_reported(const char *path, mode_t kind,
+                                 uid_t trusted_uid, bool executable,
+                                 bool require_root_owner,
+                                 struct kvalve_trust_report *report);
 bool kvalve_secure_launcher(const kvalve_client_context *context);
+bool kvalve_secure_launcher_reported(const kvalve_client_context *context,
+                                     struct kvalve_trust_report *report);
+bool kvalve_trust_reason_is_ancestry(enum kvalve_trust_reason reason);
+const char *kvalve_trust_reason_name(enum kvalve_trust_reason reason);
 bool kvalve_process_group_exists(pid_t process_group);
 bool kvalve_process_identity_matches(pid_t pid, pid_t process_group,
                                      uint64_t start_time);

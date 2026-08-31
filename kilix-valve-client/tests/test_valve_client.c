@@ -538,6 +538,103 @@ test_install_boundary(const struct fixture *fixture)
     kvalve_client_context_free(context);
 }
 
+/* A policy whose BYTES are perfect but whose directory anyone may write to.
+ *
+ * This is the case that used to arrive as ERR_CONFLICTING /
+ * "system-layer-conflicting" -- "A Steam policy path exists but does not match
+ * trusted packaged state" -- which was a claim about Steam for a problem about
+ * a directory. The file was never read and nothing was compared, so there was
+ * no conflict to report. The control below keeps a genuine content mismatch on
+ * the conflicting code, so the two cannot collapse back into one answer.
+ */
+static void
+test_untrusted_path(const struct fixture *fixture)
+{
+    static const char policy[] =
+        "schema=plebian-os.steam-policy/v1\n"
+        "authorization_schema=kilix.install.authorization/v2\n"
+        "architectures=amd64,i386\n"
+        "packages=steam-launcher,steam-libs-amd64:amd64,steam-libs-i386:i386\n"
+        "helper_modes=install,repair,verify\n"
+        "archive_policy_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "key_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+        "pin_policy_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n";
+    char open_directory[PATH_MAX];
+    char open_policy[PATH_MAX];
+    char trusted_copy[PATH_MAX];
+    kvalve_client_context *context;
+    kvalve_client_status *status = NULL;
+    struct kvalve_trust_report report;
+
+    CHECK(path_join(open_directory, fixture->root, "world-writable"));
+    CHECK(mkdir(open_directory, 0700) == 0);
+    CHECK(path_join(open_policy, open_directory, "policy"));
+    CHECK(write_fixture(open_policy, policy, 0600));
+    /* Opened only after the file is written, so the bytes were never exposed. */
+    CHECK(chmod(open_directory, 0777) == 0);
+
+    /* The rule itself, reported rather than inferred. */
+    CHECK(!kvalve_secure_file_reported(open_policy, S_IFREG, geteuid(), false,
+                                       false, &report));
+    CHECK(report.reason == KVALVE_TRUST_ANCESTOR_WRITABLE);
+    CHECK(kvalve_trust_reason_is_ancestry(report.reason));
+    CHECK(strcmp(report.path, open_directory) == 0);
+    CHECK((report.mode & (S_IWGRP | S_IWOTH)) != 0);
+    CHECK(strcmp(kvalve_trust_reason_name(report.reason),
+                 "ancestor-writable") == 0);
+
+    /* The same file, with the directory closed again, is trusted -- so the
+     * refusal above is about the directory and nothing else. */
+    CHECK(chmod(open_directory, 0700) == 0);
+    CHECK(kvalve_secure_file_reported(open_policy, S_IFREG, geteuid(), false,
+                                      false, &report));
+    CHECK(report.reason == KVALVE_TRUST_OK);
+    CHECK(chmod(open_directory, 0777) == 0);
+
+    context = configured_context(
+        fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, open_policy,
+        fixture->architectures, fixture->package_status, "x86_64");
+    CHECK(context != NULL);
+    CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_probe(context, status) == KVALVE_CLIENT_ERR_PERMISSION);
+    CHECK(kvalve_client_status_classification(status)
+          == KVALVE_CLIENT_INSTALL_UNKNOWN);
+    CHECK(!kvalve_client_status_policy_verified(status));
+    CHECK(strcmp(kvalve_client_status_diagnostic(status)->code,
+                 "system-layer-untrusted-path") == 0);
+    /* The summary names the offending directory, which is the whole point:
+     * the reader should not have to guess which path failed. */
+    CHECK(strstr(kvalve_client_status_diagnostic(status)->summary,
+                 open_directory) != NULL);
+    CHECK(strstr(kvalve_client_status_diagnostic(status)->summary,
+                 "policy") != NULL);
+    CHECK(!kvalve_client_status_diagnostic(status)->retryable);
+    kvalve_client_status_free(status);
+    kvalve_client_context_free(context);
+
+    /* Control: a trusted directory and a policy that genuinely disagrees still
+     * reports conflicting, so the new code has not swallowed the old one. */
+    CHECK(path_join(trusted_copy, fixture->root, "untrusted-control-policy"));
+    CHECK(write_fixture(trusted_copy, "schema=wrong\n", 0600));
+    context = configured_context(
+        fixture, fixture->helper, KVALVE_TEST_FAKE_STEAM, trusted_copy,
+        fixture->architectures, fixture->package_status, "x86_64");
+    CHECK(context != NULL);
+    CHECK(kvalve_client_status_create(&status) == KVALVE_CLIENT_OK);
+    CHECK(kvalve_client_probe(context, status) == KVALVE_CLIENT_ERR_CONFLICTING);
+    CHECK(kvalve_client_status_classification(status)
+          == KVALVE_CLIENT_INSTALL_CONFLICTING);
+    CHECK(strcmp(kvalve_client_status_diagnostic(status)->code,
+                 "system-layer-conflicting") == 0);
+    kvalve_client_status_free(status);
+    kvalve_client_context_free(context);
+
+    (void)chmod(open_directory, 0700);
+    (void)unlink(open_policy);
+    (void)rmdir(open_directory);
+    (void)unlink(trusted_copy);
+}
+
 static void
 test_helper_descriptor_boundary(const struct fixture *fixture)
 {
@@ -715,6 +812,7 @@ main(void)
         return 70;
     }
     test_probe(&fixture);
+    test_untrusted_path(&fixture);
     test_helper_descriptor_boundary(&fixture);
     test_install_boundary(&fixture);
     test_state_names();

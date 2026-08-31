@@ -19,6 +19,22 @@ The library never accepts a password, token, repository URL, signing key,
 package name, helper path, launcher path, shell fragment, or public display
 override from its public API.
 
+## Trusted paths
+
+The helper, launcher and policy are read only when the file and **every**
+directory above it up to `/` is owned by root or the invoking user and is not
+group- or other-writable. A file reachable through a directory someone else can
+write to could be replaced between the check and the read, so it is not read at
+all.
+
+A run that fails this rule returns `KVALVE_CLIENT_ERR_PERMISSION` with
+classification `unknown` and the diagnostic code `system-layer-untrusted-path`,
+and the summary names the directory that failed, its mode and its owner. That
+is deliberately distinct from `system-layer-conflicting`, which means the file
+*was* read and did not match the fixed policy. The distinction matters in
+practice: a checkout or `TMPDIR` under `/tmp` (mode `1777` on a stock system)
+trips the first and never the second.
+
 ## Display and process boundary
 
 The public session entry point currently fails closed with

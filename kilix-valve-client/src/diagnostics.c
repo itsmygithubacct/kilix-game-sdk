@@ -33,6 +33,27 @@ kvalve_diag_copy(struct kvalve_diagnostic_storage *destination,
                     source->summary, source->view.retryable);
 }
 
+/* A stable token for the trust rule a path failed, so a caller that wants to
+ * branch or log has something narrower than the English summary. */
+const char *
+kvalve_trust_reason_name(enum kvalve_trust_reason reason)
+{
+    switch (reason) {
+    case KVALVE_TRUST_OK: return "ok";
+    case KVALVE_TRUST_PATH_INVALID: return "path-invalid";
+    case KVALVE_TRUST_ABSENT: return "absent";
+    case KVALVE_TRUST_WRONG_TYPE: return "wrong-type";
+    case KVALVE_TRUST_OWNER: return "untrusted-owner";
+    case KVALVE_TRUST_WRITABLE: return "writable";
+    case KVALVE_TRUST_NOT_EXECUTABLE: return "not-executable";
+    case KVALVE_TRUST_ANCESTOR_UNREADABLE: return "ancestor-unreadable";
+    case KVALVE_TRUST_ANCESTOR_NOT_DIRECTORY: return "ancestor-not-directory";
+    case KVALVE_TRUST_ANCESTOR_OWNER: return "ancestor-untrusted-owner";
+    case KVALVE_TRUST_ANCESTOR_WRITABLE: return "ancestor-writable";
+    }
+    return "unknown";
+}
+
 const char *
 kvalve_client_result_name(kvalve_client_result result)
 {

@@ -1,12 +1,14 @@
 #include "kilix_game_loop.h"
 #include "kilix_game_runtime.h"
 #include "kilix_game_audio.h"
+#include "kilix_game_policy.h"
 #include "kilix_game_test.h"
 #include "kilix_state_codec.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <math.h>
 #include <stdbool.h>
 #include <signal.h>
 #include <stdio.h>
@@ -629,6 +631,169 @@ static bool test_audio_cli_and_golden(void)
     return true;
 }
 
+/* The 2-3-2 reference policy shared with tests/test_kilix_policy.py: both
+ * sides must produce this exact blob digest. */
+static const float policy_parameters[17] = {
+    1.0f, -1.0f, 0.5f, 0.5f, -2.0f, 1.0f,   /* W1 [3][2] */
+    0.0f, 0.25f, -0.5f,                     /* b1 */
+    1.0f, 2.0f, -1.0f, -1.0f, 0.5f, 3.0f,   /* W2 [2][3] */
+    0.1f, -0.2f                             /* b2 */
+};
+#define POLICY_BLOB_SIZE 108u
+
+static void put_u32(uint8_t *bytes, uint32_t value)
+{
+    for (unsigned index = 0; index < 4u; index++)
+        bytes[index] = (uint8_t)(value >> (8u * index));
+}
+
+static void put_f32(uint8_t *bytes, float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    put_u32(bytes, bits);
+}
+
+static void seal_policy(uint8_t *blob, size_t size)
+{
+    uint64_t digest = kilix_policy_fnv1a64(blob, size - 8u);
+    put_u32(blob + size - 8u, (uint32_t)digest);
+    put_u32(blob + size - 4u, (uint32_t)(digest >> 32));
+}
+
+static void build_policy(uint8_t blob[POLICY_BLOB_SIZE])
+{
+    static const uint32_t widths[3] = {2u, 3u, 2u};
+    memcpy(blob, "KXPOLICY", 8u);
+    put_u32(blob + 8, 1u);
+    put_u32(blob + 12, 2u);
+    for (unsigned index = 0; index < 3u; index++)
+        put_u32(blob + 16u + 4u * index, widths[index]);
+    put_f32(blob + 28, 1.5f);
+    for (unsigned index = 0; index < 17u; index++)
+        put_f32(blob + 32u + 4u * index, policy_parameters[index]);
+    seal_policy(blob, POLICY_BLOB_SIZE);
+}
+
+static bool policy_rejects(const uint8_t *blob, size_t size,
+                           kilix_policy_status expected)
+{
+    kilix_policy policy;
+    kilix_policy_status status = kilix_policy_load(&policy, blob, size);
+    bool zeroed = policy.parameters == NULL && policy.layer_count == 0u;
+    kilix_policy_free(&policy);
+    return status == expected && zeroed;
+}
+
+static bool test_policy_forward_and_helpers(void)
+{
+    uint8_t blob[POLICY_BLOB_SIZE];
+    kilix_policy policy;
+    float inputs[2] = {2.0f, 1.0f};
+    float logits[2];
+    float probabilities[2];
+
+    build_policy(blob);
+    CHECK(kilix_policy_fnv1a64(blob, POLICY_BLOB_SIZE - 8u) ==
+          UINT64_C(0xc08fcc42e5238118));
+    CHECK(kilix_policy_load(&policy, blob, sizeof blob) == KILIX_POLICY_OK);
+    CHECK(policy.layer_count == 2u && policy.parameter_count == 17u);
+    CHECK(kilix_policy_input_count(&policy) == 2u);
+    CHECK(kilix_policy_output_count(&policy) == 2u);
+    CHECK(policy.temperature == 1.5f);
+    CHECK(policy.digest == UINT64_C(0xc08fcc42e5238118));
+
+    /* h = relu([1, 1.75, -3.5]) = [1, 1.75, 0] */
+    CHECK(kilix_policy_forward(&policy, inputs, 2u, logits, 2u) ==
+          KILIX_POLICY_OK);
+    CHECK(fabsf(logits[0] - 4.6f) < 1e-6f);
+    CHECK(fabsf(logits[1] - -0.325f) < 1e-6f);
+    CHECK(kilix_policy_argmax(logits, 2u) == 0u);
+    CHECK(kilix_policy_forward(&policy, inputs, 3u, logits, 2u) ==
+          KILIX_POLICY_ERR_ARGUMENT);
+    CHECK(kilix_policy_forward(&policy, inputs, 2u, logits, 1u) ==
+          KILIX_POLICY_ERR_ARGUMENT);
+    CHECK(kilix_policy_forward(NULL, inputs, 2u, logits, 2u) ==
+          KILIX_POLICY_ERR_ARGUMENT);
+
+    CHECK(kilix_policy_softmax(logits, 2u, policy.temperature, probabilities));
+    CHECK(fabsf(probabilities[0] + probabilities[1] - 1.0f) < 1e-6f);
+    CHECK(fabsf(probabilities[0] -
+                1.0f / (1.0f + expf((-0.325f - 4.6f) / 1.5f))) < 1e-5f);
+    CHECK(!kilix_policy_softmax(NULL, 2u, 1.0f, probabilities));
+    CHECK(kilix_policy_softmax(logits, 2u, -1.0f, probabilities));
+
+    const float ties[3] = {1.0f, 3.0f, 3.0f};
+    CHECK(kilix_policy_argmax(ties, 3u) == 1u);
+    CHECK(kilix_policy_argmax(NULL, 3u) == 0u);
+
+    kilix_policy_free(&policy);
+    CHECK(policy.parameters == NULL && kilix_policy_input_count(&policy) == 0u);
+    kilix_policy_free(NULL);
+    CHECK(kilix_policy_status_string(KILIX_POLICY_ERR_DIGEST) != NULL);
+    return true;
+}
+
+static bool test_policy_rejects_damage(void)
+{
+    uint8_t blob[POLICY_BLOB_SIZE];
+    uint8_t larger[POLICY_BLOB_SIZE + 1u];
+    kilix_policy policy;
+
+    build_policy(blob);
+    CHECK(kilix_policy_load(NULL, blob, sizeof blob) ==
+          KILIX_POLICY_ERR_ARGUMENT);
+    CHECK(policy_rejects(NULL, sizeof blob, KILIX_POLICY_ERR_ARGUMENT));
+    for (size_t size = 0; size < sizeof blob; size++)
+        CHECK(policy_rejects(blob, size, KILIX_POLICY_ERR_TRUNCATED));
+    memcpy(larger, blob, sizeof blob);
+    larger[sizeof blob] = 0u;
+    CHECK(policy_rejects(larger, sizeof larger, KILIX_POLICY_ERR_SIZE));
+
+    build_policy(blob);
+    blob[0] = 'k';
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_MAGIC));
+    build_policy(blob);
+    put_u32(blob + 8, 2u);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_VERSION));
+    build_policy(blob);
+    put_u32(blob + 12, 0u);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_SHAPE));
+    build_policy(blob);
+    put_u32(blob + 12, KILIX_POLICY_MAX_LAYERS + 1u);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_SHAPE));
+    build_policy(blob);
+    put_u32(blob + 20, KILIX_POLICY_MAX_WIDTH + 1u);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_SHAPE));
+
+    /* Every single-bit flip in the body is caught by the digest or an
+       earlier structural check -- never loaded. */
+    for (size_t byte = 0; byte < sizeof blob; byte++) {
+        for (unsigned bit = 0; bit < 8u; bit++) {
+            build_policy(blob);
+            blob[byte] ^= (uint8_t)(1u << bit);
+            CHECK(kilix_policy_load(&policy, blob, sizeof blob) !=
+                  KILIX_POLICY_OK);
+        }
+    }
+
+    /* Resealed damage: a non-finite parameter or temperature with a valid
+       digest is still refused. */
+    build_policy(blob);
+    put_f32(blob + 32, NAN);
+    seal_policy(blob, sizeof blob);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_NONFINITE));
+    build_policy(blob);
+    put_f32(blob + 28, 0.0f);
+    seal_policy(blob, sizeof blob);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_NONFINITE));
+    build_policy(blob);
+    put_f32(blob + 28, INFINITY);
+    seal_policy(blob, sizeof blob);
+    CHECK(policy_rejects(blob, sizeof blob, KILIX_POLICY_ERR_NONFINITE));
+    return true;
+}
+
 int main(void)
 {
     if (!test_fixed_step() || !test_clock_validation_and_sleep() ||
@@ -639,7 +804,9 @@ int main(void)
         !test_crash_signals() ||
         !test_data_root_from_executable() ||
         !test_audio_validation() ||
-        !test_audio_cli_and_golden()) return EXIT_FAILURE;
+        !test_audio_cli_and_golden() ||
+        !test_policy_forward_and_helpers() ||
+        !test_policy_rejects_damage()) return EXIT_FAILURE;
     (void)puts("ok: kilix-game-kit");
     return EXIT_SUCCESS;
 }

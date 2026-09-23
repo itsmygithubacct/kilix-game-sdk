@@ -9,7 +9,7 @@ int main(void)
     kilix_game_clock clock;
 
     if (KILIX_GAME_KIT_VERSION_MAJOR != 0 ||
-        KILIX_GAME_KIT_VERSION_MINOR != 5 ||
+        KILIX_GAME_KIT_VERSION_MINOR != 6 ||
         KILIX_GAME_KIT_VERSION_PATCH != 0)
         return 1;
     kilix_game_clock_options_init(&options);

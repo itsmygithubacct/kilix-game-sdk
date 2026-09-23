@@ -131,6 +131,28 @@ scene uses `pcm-mixer`'s two-slot crossfade; selecting the current scene only
 retargets volume. A missing optional sink leaves a ready, silent runtime,
 while offline mode runs the exact mixer path in tests.
 
+## Policy networks
+
+`kilix_game_policy` runs tiny trained agents (CPU opponents, bots, NPC
+steering) inside a game's fixed-step loop. A policy is a dense multilayer
+perceptron with ReLU hidden layers and a linear output, stored as a versioned
+little-endian blob: `KXPOLICY` magic, layer widths, a calibration temperature,
+float32 parameters and an FNV-1a-64 digest. `kilix_policy_load()` copies the
+blob into one owned allocation. Truncation, trailing bytes, foreign magic,
+unknown versions, shapes beyond 8 layers or 256 units, non-finite values and
+digest mismatches are all rejected, and a failed load leaves nothing
+allocated. `kilix_policy_forward()` then allocates nothing and evaluates in a
+fixed order, so a replay stays bit-identical within one build.
+`kilix_policy_argmax()` and `kilix_policy_softmax()` turn logits into an
+action or calibrated probabilities.
+
+`tools/kilix_policy.py` (standard library only) packs raw float32 parameters
+exported from a trainer into a blob, verifies one, and embeds it as a
+generated C header. `embed --check` fails when a checked-in header has drifted
+from its blob, which lets a game compile its weights in and still prove where
+they came from. The format carries no training code or data: each game keeps
+its own trainer and provenance record next to the blob it ships.
+
 ## Test helpers
 
 Link `libkilix-game-test.a` with `-lutil` to create fixed-size PTYs and assert
@@ -143,6 +165,10 @@ tolerance. PPM conversion is chunked, so artifact time scales with pixel work
 rather than one stdio call per pixel.
 
 ## Compatibility
+
+Game-kit 0.6 adds the `kilix_policy_*` functions and `kilix_game_policy.h`;
+the existing `kilix_game_*` and `kilix_test_*` functions and layouts are
+unchanged from 0.5.
 
 Game-kit 0.5 keeps the same `kilix_game_*` and `kilix_test_*` function set.
 The reviewed terminal dependency enlarges the public aggregate host object, so

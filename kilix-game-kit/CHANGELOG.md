@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 - unreleased
+
+- Add `kilix_game_policy`: a bounded, allocation-free-after-load runtime for
+  tiny dense ReLU policy networks. Versioned `KXPOLICY` blobs carry a
+  calibration temperature and an FNV-1a-64 digest. Damaged, truncated,
+  oversized or non-finite blobs are refused. Also adds argmax and softmax
+  helpers.
+- Add `tools/kilix_policy.py` to pack, verify and embed policy blobs, with a
+  drift check for generated headers. C and Python tests share one reference
+  blob digest.
+
 ## 0.5.0 - 2026-08-09
 
 - Saturate extreme caller-supplied clock deltas before fixed-step clamping.

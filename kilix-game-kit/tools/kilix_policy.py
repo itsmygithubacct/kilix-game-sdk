@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack, verify and embed kilix-game-kit policy blobs (format v1).
 
-    kilix_policy.py pack --widths 11 64 64 3 [--temperature T] RAW.f32 OUT.kxpol
+    kilix_policy.py pack --widths 11,64,64,3 [--temperature T] RAW.f32 OUT.kxpol
     kilix_policy.py verify BLOB.kxpol
     kilix_policy.py embed BLOB.kxpol --symbol NAME OUT.h [--check]
 
@@ -104,7 +104,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("pack")
-    p.add_argument("--widths", type=int, nargs="+", required=True)
+    p.add_argument("--widths", required=True,
+                   help="comma-separated layer widths, inputs first, e.g. 11,64,64,3")
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("raw")
     p.add_argument("out")
@@ -118,8 +119,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "pack":
+            try:
+                widths = [int(w) for w in args.widths.split(",")]
+            except ValueError:
+                raise ValueError(f"bad --widths {args.widths!r}; expected e.g. 11,64,64,3")
             with open(args.raw, "rb") as fh:
-                blob = pack(args.widths, fh.read(), args.temperature)
+                blob = pack(widths, fh.read(), args.temperature)
             with open(args.out, "wb") as fh:
                 fh.write(blob)
             print(json.dumps(inspect(blob)))

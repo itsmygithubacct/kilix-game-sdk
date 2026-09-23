@@ -44,10 +44,18 @@ def main():
         with open(raw_path, "wb") as fh:
             fh.write(raw)
         tool = [sys.executable, os.path.join(HERE, "..", "tools", "kilix_policy.py")]
-        subprocess.run(tool + ["pack", "--widths", "2", "3", "2", "--temperature", "1.5",
+        subprocess.run(tool + ["pack", "--widths", "2,3,2", "--temperature", "1.5",
                                raw_path, blob_path], check=True, stdout=subprocess.DEVNULL)
         with open(blob_path, "rb") as fh:
             assert fh.read() == blob
+        # Flag order must not matter (an nargs list once swallowed the paths).
+        subprocess.run(tool + ["pack", raw_path, blob_path + "2", "--widths", "2,3,2",
+                               "--temperature", "1.5"], check=True, stdout=subprocess.DEVNULL)
+        with open(blob_path + "2", "rb") as fh:
+            assert fh.read() == blob
+        bad_widths = subprocess.run(tool + ["pack", "--widths", "2,x,2", raw_path, blob_path],
+                                    stderr=subprocess.DEVNULL)
+        assert bad_widths.returncode == 1
         subprocess.run(tool + ["embed", blob_path, "--symbol", "test_policy", header], check=True)
         with open(header, encoding="utf-8") as fh:
             text = fh.read()

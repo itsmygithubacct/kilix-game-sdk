@@ -734,6 +734,57 @@ static bool test_policy_forward_and_helpers(void)
     return true;
 }
 
+/* The width contract is literal, not the macro, so lowering the bound
+   fails here: 1 -> 1024 -> 1024 with known outputs writes and reads every
+   element of the scratch rows (hidden[r] = 1 + r, then identity), and
+   1025 is refused. */
+static bool test_policy_full_width(void)
+{
+    enum { WIDE = 1024 };
+    CHECK(KILIX_POLICY_MAX_WIDTH == WIDE);
+    size_t parameters = (size_t)WIDE * 2u + (size_t)WIDE * WIDE + WIDE;
+    size_t size = 16u + 4u * 3u + 4u + 4u * parameters + 8u;
+    uint8_t *blob = calloc(1u, size);
+    float *inputs = NULL, *outputs = NULL;
+    kilix_policy policy;
+    bool ok = false;
+
+    CHECK(blob != NULL);
+    memcpy(blob, "KXPOLICY", 8u);
+    put_u32(blob + 8, 1u);
+    put_u32(blob + 12, 2u);
+    put_u32(blob + 16, 1u);
+    put_u32(blob + 20, WIDE);
+    put_u32(blob + 24, WIDE);
+    put_f32(blob + 28, 1.0f);
+    uint8_t *cursor = blob + 32;
+    for (unsigned row = 0; row < WIDE; row++) put_f32(cursor + 4u * row, 1.0f);
+    cursor += 4u * WIDE;
+    for (unsigned row = 0; row < WIDE; row++) put_f32(cursor + 4u * row, (float)row);
+    cursor += 4u * WIDE;
+    for (unsigned row = 0; row < WIDE; row++)
+        put_f32(cursor + 4u * ((size_t)row * WIDE + row), 1.0f);  /* zeros elsewhere */
+    seal_policy(blob, size);
+
+    float one = 1.0f;
+    inputs = &one;
+    outputs = calloc(WIDE, sizeof *outputs);
+    CHECK(outputs != NULL);
+    CHECK(kilix_policy_load(&policy, blob, size) == KILIX_POLICY_OK);
+    CHECK(kilix_policy_forward(&policy, inputs, 1u, outputs, WIDE) == KILIX_POLICY_OK);
+    CHECK(outputs[0] == 1.0f && outputs[WIDE - 1] == (float)WIDE);
+    CHECK(kilix_policy_argmax(outputs, WIDE) == WIDE - 1u);
+    kilix_policy_free(&policy);
+
+    put_u32(blob + 24, WIDE + 1u);         /* one past the bound: refused */
+    seal_policy(blob, size);
+    CHECK(policy_rejects(blob, size, KILIX_POLICY_ERR_SHAPE));
+    ok = true;
+    free(outputs);
+    free(blob);
+    return ok;
+}
+
 static bool test_policy_rejects_damage(void)
 {
     uint8_t blob[POLICY_BLOB_SIZE];
@@ -806,6 +857,7 @@ int main(void)
         !test_audio_validation() ||
         !test_audio_cli_and_golden() ||
         !test_policy_forward_and_helpers() ||
+        !test_policy_full_width() ||
         !test_policy_rejects_damage()) return EXIT_FAILURE;
     (void)puts("ok: kilix-game-kit");
     return EXIT_SUCCESS;

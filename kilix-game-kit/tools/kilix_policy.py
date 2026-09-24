@@ -21,7 +21,7 @@ import sys
 MAGIC = b"KXPOLICY"
 VERSION = 1
 MAX_LAYERS = 8
-MAX_WIDTH = 256
+MAX_WIDTH = 1024
 
 
 def fnv1a64(data: bytes) -> int:

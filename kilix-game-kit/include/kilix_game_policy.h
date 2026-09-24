@@ -9,7 +9,8 @@
  * bounded and allocation-free after load:
  *
  *   - at most KILIX_POLICY_MAX_LAYERS weight layers, each at most
- *     KILIX_POLICY_MAX_WIDTH wide;
+ *     KILIX_POLICY_MAX_WIDTH wide (evaluation keeps two scratch rows of
+ *     that width on the stack, 8 KiB);
  *   - evaluation order is fixed (row-major dot products, ascending index), so
  *     one binary replays one policy bit-identically;
  *   - load rejects truncation, trailing bytes, foreign magic, unknown
@@ -39,7 +40,7 @@ extern "C" {
 #endif
 
 #define KILIX_POLICY_MAX_LAYERS 8u
-#define KILIX_POLICY_MAX_WIDTH 256u
+#define KILIX_POLICY_MAX_WIDTH 1024u
 #define KILIX_POLICY_VERSION 1u
 
 typedef enum kilix_policy_status {

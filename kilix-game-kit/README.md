@@ -139,7 +139,7 @@ perceptron with ReLU hidden layers and a linear output, stored as a versioned
 little-endian blob: `KXPOLICY` magic, layer widths, a calibration temperature,
 float32 parameters and an FNV-1a-64 digest. `kilix_policy_load()` copies the
 blob into one owned allocation. Truncation, trailing bytes, foreign magic,
-unknown versions, shapes beyond 8 layers or 256 units, non-finite values and
+unknown versions, shapes beyond 8 layers or 1024 units, non-finite values and
 digest mismatches are all rejected, and a failed load leaves nothing
 allocated. `kilix_policy_forward()` then allocates nothing and evaluates in a
 fixed order, so a replay stays bit-identical within one build.

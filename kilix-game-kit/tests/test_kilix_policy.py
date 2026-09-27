@@ -39,6 +39,14 @@ def main():
     damaged[40] ^= 1
     expect_error(kp.inspect, bytes(damaged))
 
+    # Literal contract: 1024-wide layers (and a solitaire-sized 690 -> 681
+    # policy) pack and verify; 1025 is refused.
+    for wide in ([1024, 1, 1024], [690, 8, 681]):
+        wide_raw = bytes(4 * kp.parameter_count(wide))
+        assert kp.inspect(kp.pack(wide, wide_raw))["widths"] == wide
+    past = [1025, 1, 1]
+    expect_error(kp.pack, past, bytes(4 * kp.parameter_count(past)))
+
     with tempfile.TemporaryDirectory() as tmp:
         raw_path, blob_path, header = (os.path.join(tmp, n) for n in ("p.f32", "p.kxpol", "p.h"))
         with open(raw_path, "wb") as fh:

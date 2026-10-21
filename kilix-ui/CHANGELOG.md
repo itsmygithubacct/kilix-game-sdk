@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-10-21
+
+- Place calendar day numbers through the view like every other draw. They
+  were positioned in logical units, which match canvas pixels only at scale
+  1 with no offset, so at any larger view the numbers drifted out of their
+  cells.
+- Number the in-month cells 1, 2, 3... in grid order. Each number was its
+  grid index plus one, so leading filler shifted the whole month and a
+  30-day month could read up to 35.
+
 ## 0.4.0 — 2026-08-11
 
 - Add `kilix_ui_draw_calendar`, a 7-column week grid with per-day mark

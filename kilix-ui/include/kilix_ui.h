@@ -192,7 +192,8 @@ typedef struct kilix_ui_shop_item {
  * and every consumer disagrees about those. */
 typedef struct kilix_ui_calendar_day {
     uint8_t marks;     /* bitmask of caller-defined event classes */
-    bool in_month;     /* false for leading/trailing filler cells */
+    bool in_month;     /* false for leading/trailing filler cells; in-month
+                        * cells are numbered 1, 2, 3... in grid order */
     bool enabled;
 } kilix_ui_calendar_day;
 

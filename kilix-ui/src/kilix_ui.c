@@ -1069,6 +1069,7 @@ void kilix_ui_draw_calendar(ki_td_soft_renderer *renderer,
     int saved[4];
     size_t index;
     int column;
+    int day_number = 0;
 
     if (!calendar_grid(rect, &selected, calendar, &grid)) return;
     if (!begin_panel(renderer, view, rect, &selected, skin, &canvas, saved))
@@ -1101,9 +1102,12 @@ void kilix_ui_draw_calendar(ki_td_soft_renderer *renderer,
         char number[8];
         size_t length = 0u;
         uint32_t ink;
+        int number_x;
+        int number_y;
         int bit;
 
         if (!day->in_month) continue;   /* filler stays blank, not greyed */
+        ++day_number;
 
         if (focus && focus->selected == index) {
             ki_td_soft_fill_rect(renderer, view, (float)cell_x,
@@ -1124,13 +1128,17 @@ void kilix_ui_draw_calendar(ki_td_soft_renderer *renderer,
                                  selected.accent_color, 0.9f);
         }
 
+        /* The number is the day's place among the in-month cells, so leading
+         * filler shifts nothing. sr_text_in takes canvas pixels, which is why
+         * the cell corner goes through the view like every other draw here. */
         number[0] = '\0';
-        append_integer(number, sizeof number, &length,
-                       (int)(index % 7u) + 1 + (int)(index / 7u) * 7);
+        append_integer(number, sizeof number, &length, day_number);
         ink = day->enabled ? selected.text_color : selected.muted_color;
-        sr_text_in(calendar->font, ki_td_soft_canvas(renderer),
-                   (float)(cell_x + 2), (float)(cell_y + 1), number, ink,
-                   1.0f, text_scale(view, &selected));
+        if (screen_x(view, cell_x + 2, &number_x) &&
+            screen_y(view, cell_y + 1, &number_y))
+            sr_text_in(calendar->font, ki_td_soft_canvas(renderer),
+                       (float)number_x, (float)number_y, number, ink, 1.0f,
+                       text_scale(view, &selected));
 
         /* Marks: one dot per set bit, in bit order, beneath the number. */
         for (bit = 0; bit < 8; ++bit) {

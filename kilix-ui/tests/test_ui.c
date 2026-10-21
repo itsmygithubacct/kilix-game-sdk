@@ -939,6 +939,104 @@ static bool test_calendar(void)
     return true;
 }
 
+/* Ink a draw left on top of base, and how much of it fell outside the
+ * screen rect [x0,x1) x [y0,y1). */
+static size_t ink_outside(const sr_canvas *canvas, const uint32_t *base,
+                          int x0, int y0, int x1, int y1, size_t *ink)
+{
+    size_t outside = 0u;
+    int x, y;
+    *ink = 0u;
+    for (y = 0; y < canvas->h; ++y) {
+        for (x = 0; x < canvas->w; ++x) {
+            size_t at = (size_t)y * (size_t)canvas->w + (size_t)x;
+            if (canvas->px[at] == base[at]) continue;
+            ++*ink;
+            if (x < x0 || x >= x1 || y < y0 || y >= y1) ++outside;
+        }
+    }
+    return outside;
+}
+
+/* A day number belongs to its cell at every view, and counts in-month cells
+ * rather than grid cells. Both failed together once: the numbers were placed
+ * in logical units, which only coincide with canvas pixels at scale 1 and no
+ * offset -- the one view the widget had been tested at -- and each one was
+ * its grid index plus one, so every month started on the wrong number. */
+static bool test_calendar_numbers(void)
+{
+    static kilix_ui_calendar_day days[35];
+    static uint32_t base[640u * 360u];
+    static const size_t cells[3] = {0u, 9u, 33u};
+    ki_td_soft_renderer renderer = {0};
+    kilix_ui_style style;
+    kilix_ui_calendar calendar;
+    ki_td_rect rect = {4, 4, 220, 150};
+    sr_canvas *canvas;
+    int cell_width, cell_height, origin_x, origin_y;
+    int pass;
+
+    kilix_ui_style_init(&style);
+    CHECK(ki_td_soft_renderer_init(&renderer, 640, 360));
+    canvas = ki_td_soft_canvas(&renderer);
+    memset(&calendar, 0, sizeof calendar);
+    calendar.days = days;
+    calendar.day_count = 35u;
+    calendar.today = SIZE_MAX;
+    calendar.font = SR_FONT_COMPACT_7X14;
+    cell_width = (rect.width - 2 * style.padding) / 7;
+    cell_height = (rect.height - 2 * style.padding - 2 * style.row_height) / 5;
+    origin_x = rect.x + style.padding;
+    origin_y = rect.y + style.padding + 2 * style.row_height;
+
+    for (pass = 0; pass < 2; ++pass) {
+        ki_td_view view = {0};
+        size_t first_ink = 0u;
+        size_t which;
+        view.logical_width = 320;
+        view.logical_height = 180;
+        view.scale = pass == 0 ? 1.0f : 2.0f;
+        view.offset_x = pass == 0 ? 0 : 7;
+        view.offset_y = pass == 0 ? 0 : 5;
+
+        /* The panel alone, every cell filler. */
+        memset(days, 0, sizeof days);
+        ki_td_soft_clear(&renderer, 0u);
+        kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL, NULL,
+                               &calendar);
+        memcpy(base, canvas->px,
+               (size_t)canvas->w * (size_t)canvas->h * sizeof base[0]);
+
+        /* One in-month cell at a time: wherever it sits it is the first day,
+         * so it must draw the same "1" -- and only inside itself. */
+        for (which = 0u; which < 3u; ++which) {
+            size_t cell = cells[which];
+            int left = origin_x + (int)(cell % 7u) * cell_width;
+            int top = origin_y + (int)(cell / 7u) * cell_height;
+            size_t ink;
+            memset(days, 0, sizeof days);
+            days[cell].in_month = true;
+            days[cell].enabled = true;
+            ki_td_soft_clear(&renderer, 0u);
+            kilix_ui_draw_calendar(&renderer, &view, rect, &style, NULL,
+                                   NULL, &calendar);
+            CHECK(ink_outside(canvas, base,
+                              ki_td_screen_x(&view, (float)left),
+                              ki_td_screen_y(&view, (float)top),
+                              ki_td_screen_x(&view,
+                                             (float)(left + cell_width)),
+                              ki_td_screen_y(&view,
+                                             (float)(top + cell_height)),
+                              &ink) == 0u);
+            CHECK(ink > 0u);
+            if (which == 0u) first_ink = ink;
+            CHECK(ink == first_ink);
+        }
+    }
+    ki_td_soft_renderer_destroy(&renderer);
+    return true;
+}
+
 int main(void)
 {
     static const struct test_case {
@@ -957,7 +1055,8 @@ int main(void)
         {"prompt truncation", test_prompt_truncation},
         {"randomized render safety", test_randomized_render_safety},
         {"list hit agrees with draw", test_list_hit_agrees_with_draw},
-        {"calendar widget", test_calendar}
+        {"calendar widget", test_calendar},
+        {"calendar numbers follow the view", test_calendar_numbers}
     };
     size_t index;
     size_t failures = 0u;
